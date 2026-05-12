@@ -1,0 +1,45 @@
+[package]
+name = "mod-tempdir"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+readme = "README.md"
+license = "Apache-2.0"
+
+authors = [
+    "James Gober <me@jamesgober.com>"
+]
+
+description = "Temporary directory management for Rust. Auto-cleanup on Drop, collision-resistant naming, cross-platform paths. Zero external dependencies. tempfile replacement targeting MSRV 1.75."
+
+keywords = [
+    "tempfile",
+    "tempdir",
+    "temporary",
+    "filesystem",
+    "raii"
+]
+
+categories = [
+    "filesystem",
+    "development-tools::testing"
+]
+
+documentation = "https://docs.rs/mod-tempdir"
+repository = "https://github.com/jamesgober/mod-tempdir"
+homepage = "https://github.com/jamesgober/mod-tempdir"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+
+[dev-dependencies]
+
+[features]
+default = []
+
+[profile.release]
+opt-level = 3
+lto = "thin"
