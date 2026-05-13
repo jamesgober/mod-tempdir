@@ -18,6 +18,8 @@ for `tempfile`.
 - Collision-resistant naming, shared between directories and files.
 - Optional persistence (disable cleanup for debugging).
 - Optional prefix for tracking purposes.
+- Optional sweep at process startup to remove entries left behind
+  by crashed processes (`cleanup_orphans`).
 
 ## 3. API
 
@@ -45,7 +47,16 @@ impl NamedTempFile {
 }
 
 impl Drop for NamedTempFile { /* remove_file */ }
+
+pub fn cleanup_orphans(max_age_hours: u64) -> io::Result<usize>;
 ```
+
+Default basenames carry the originating process's PID:
+`TempDir::new` produces `.tmp-{pid}-{name12}` and
+`NamedTempFile::new` produces `.tmpfile-{pid}-{name12}`. The PID is
+the key `cleanup_orphans` uses to identify orphans from crashed
+runs. `with_prefix` outputs do not carry a PID and are outside
+`cleanup_orphans`'s namespace.
 
 ## 4. Determinism
 

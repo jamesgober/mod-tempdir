@@ -87,6 +87,8 @@ NamedTempFile::with_prefix("x")  // -> io::Result<NamedTempFile> with custom pre
 file.path()                      // -> &Path
 file.persist()                   // -> PathBuf (disables cleanup)
 file.cleanup_on_drop()           // -> bool
+
+cleanup_orphans(max_age_hours)   // -> io::Result<usize> (removed count)
 ```
 
 Both types share the same `with_prefix` / `path` / `persist` /
@@ -99,15 +101,18 @@ public surface at `0.9.1` and is stable through the rest of the
 ### Default basenames
 
 Default basenames are deliberately distinguishable so an operator
-inspecting the OS temp dir can tell entries apart at a glance:
+inspecting the OS temp dir can tell entries apart at a glance, and
+they carry the originating process's PID so orphans from crashed
+runs can be identified later:
 
-| Type            | Default basename             |
-|-----------------|------------------------------|
-| `TempDir`       | `.tmp-{12-char-name}`        |
-| `NamedTempFile` | `.tmpfile-{12-char-name}`    |
+| Type            | Default basename                     |
+|-----------------|--------------------------------------|
+| `TempDir`       | `.tmp-{pid}-{12-char-name}`          |
+| `NamedTempFile` | `.tmpfile-{pid}-{12-char-name}`      |
 
-Caller-supplied prefixes via `with_prefix` are joined verbatim and
-override the default.
+Caller-supplied prefixes via `with_prefix` are joined verbatim
+(without the PID segment) and override the default. The user's
+namespace is the user's responsibility to clean up.
 
 ## Feature flags
 
@@ -147,6 +152,37 @@ crypto-quality random names (for example, for security-sensitive
 temp paths), generate one with `mod_rand::tier3` and pass it to
 `TempDir::with_prefix`.
 
+## Cleaning up after crashes
+
+If a process panics, gets SIGKILL'd, or otherwise exits without
+running `Drop`, its temp entries are left behind. `cleanup_orphans`
+sweeps the OS temp directory for default-prefix entries from this
+crate and removes the ones whose owning processes are no longer
+alive:
+
+```rust
+use mod_tempdir::cleanup_orphans;
+
+// At startup, before creating any new temp entries:
+let removed = cleanup_orphans(24).unwrap_or(0);
+eprintln!("cleanup_orphans removed {removed} orphan(s)");
+```
+
+Removal requires **both** conditions: the originating PID is no
+longer alive, and the entry is at least `max_age_hours` old.
+
+PID liveness is checked via `/proc/{pid}` on Linux. On macOS and
+Windows, cross-platform process introspection requires platform
+crates this library does not pull in, so the liveness check is
+treated as "dead" there. On those platforms the age threshold is
+the only safety guard: pick `max_age_hours` larger than any
+legitimate process lifetime, or call `cleanup_orphans` only at
+known-safe moments (typically program startup).
+
+Caller-supplied `with_prefix` paths and legacy entries from earlier
+versions (without a PID segment in the basename) are never touched.
+The user's namespace and historical entries are off-limits.
+
 ## Concurrency
 
 Every public constructor (`TempDir::new`, `TempDir::with_prefix`,
@@ -164,11 +200,10 @@ auto-cleanup temp dirs without pulling in `tempfile`'s dep tree.
 
 ## Roadmap
 
-`v0.9.0` shipped the `mod-rand` integration. `v0.9.1` introduces
-`NamedTempFile`. Remaining items before `v1.0.0`:
+`v0.9.0` shipped the `mod-rand` integration. `v0.9.1` introduced
+`NamedTempFile`. `v0.9.2` adds `cleanup_orphans` plus PID-aware
+default basenames. Remaining items before `v1.0.0`:
 
-- `v0.9.2`: cleanup-on-startup pass for orphaned dirs and files
-  from crashed processes
 - `v0.9.3+` (possible future): atomic file persistence
   (`NamedTempFile::persist_atomic`) backed by `fsys`'s atomic-write
   primitives, where they actually pay off

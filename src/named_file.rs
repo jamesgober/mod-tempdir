@@ -18,12 +18,14 @@ use crate::unique_name;
 /// path with [`std::fs::OpenOptions`] (or any other API) when ready
 /// to write or read.
 ///
-/// The default basename is `.tmpfile-{12-char-name}`, intentionally
-/// distinct from [`TempDir`](crate::TempDir)'s `.tmp-{12-char-name}`
+/// The default basename is `.tmpfile-{pid}-{name12}`, intentionally
+/// distinct from [`TempDir`](crate::TempDir)'s `.tmp-{pid}-{name12}`
 /// so an operator inspecting the OS temp location can tell the two
 /// apart at a glance. The 12 trailing characters use the same
 /// Crockford base32 generator as `TempDir`, so the optional
-/// `mod-rand` feature controls both types in lockstep.
+/// `mod-rand` feature controls both types in lockstep. The embedded
+/// PID lets [`cleanup_orphans`](crate::cleanup_orphans) identify
+/// files left behind by crashed processes.
 ///
 /// # Example
 ///
@@ -70,14 +72,19 @@ impl NamedTempFile {
     /// Create a new temporary file in the system's temp location
     /// (`/tmp` on Linux/macOS, `%TEMP%` on Windows).
     ///
-    /// The basename is `.tmpfile-{12-char-name}`. The file is
-    /// materialized via [`std::fs::File::create`]; the returned
-    /// `File` handle is closed before this function returns, so the
-    /// caller starts from a clean slate.
+    /// The basename is `.tmpfile-{pid}-{name12}` where `{pid}` is
+    /// the current process ID (used by
+    /// [`cleanup_orphans`](crate::cleanup_orphans) to identify
+    /// entries left behind by crashed processes) and `{name12}` is a
+    /// 12-character Crockford base32 string from the shared name
+    /// generator. The file is materialized via
+    /// [`std::fs::File::create`]; the returned `File` handle is
+    /// closed before this function returns, so the caller starts
+    /// from a clean slate.
     ///
-    /// With the `mod-rand` feature enabled, naming comes from
-    /// `mod_rand::tier2::unique_name`. Without it, naming comes from
-    /// the same internal process-unique mixer as
+    /// With the `mod-rand` feature enabled, the name fragment comes
+    /// from `mod_rand::tier2::unique_name`. Without it, from the
+    /// same internal process-unique mixer as
     /// [`TempDir::new`](crate::TempDir::new).
     ///
     /// # Errors
@@ -95,7 +102,8 @@ impl NamedTempFile {
     /// ```
     pub fn new() -> io::Result<Self> {
         let name = unique_name(12);
-        let path = std::env::temp_dir().join(format!(".tmpfile-{name}"));
+        let pid = std::process::id();
+        let path = std::env::temp_dir().join(format!(".tmpfile-{pid}-{name}"));
         std::fs::File::create(&path)?;
         Ok(Self {
             path,

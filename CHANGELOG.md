@@ -9,15 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `cleanup_orphans(max_age_hours: u64) -> io::Result<usize>`: a
+  top-level free function that sweeps the OS temp directory for
+  default-prefix entries this crate could have created and removes
+  those that are both (a) older than `max_age_hours` and (b) owned
+  by a process that is no longer alive. PID liveness is checked via
+  `/proc/{pid}` on Linux; on macOS and Windows the function falls
+  back to age-only because cross-platform process introspection
+  requires platform crates this library does not pull in. Per-entry
+  errors are silent; the function returns the count of successful
+  removals. Caller-supplied `with_prefix(...)` paths and legacy
+  entries from `0.9.0` / `0.9.1` (without a PID segment) are never
+  touched.
+- `tests/cleanup_orphans.rs`: six (seven on Linux) integration
+  tests covering removal of dead-PID orphans, age-threshold
+  preservation of recent entries, namespace isolation of custom
+  prefixes, legacy-format skipping, and Linux-only live-process
+  preservation.
 - `NamedTempFile`: file-based companion type to `TempDir`. Same API
   shape (`new`, `with_prefix`, `path`, `persist`, `cleanup_on_drop`),
   same name-generation pipeline (`mod-rand` feature applies to both
   types), same silent best-effort Drop semantics. File creation is
   backed by `std::fs::File::create`; cleanup by
   `std::fs::remove_file`. Default basename pattern is
-  `.tmpfile-{name}`, intentionally distinct from `TempDir`'s
-  `.tmp-{name}` so an operator inspecting the OS temp dir can tell
-  files and directories apart. Windows handle-lock behavior is
+  `.tmpfile-{pid}-{name}`, intentionally distinct from `TempDir`'s
+  `.tmp-{pid}-{name}` so an operator inspecting the OS temp dir can
+  tell files and directories apart. Windows handle-lock behavior is
   documented in the type's rustdoc.
 - `tests/named_file_smoke.rs`: happy-path coverage (creation,
   cleanup, persist, prefix, default-prefix shape, uniqueness, write
@@ -38,16 +55,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Default basename format now includes the originating PID.**
+  `TempDir::new` produces `.tmp-{pid}-{name12}` (was `.tmp-{name12}`
+  in `0.9.0`). `NamedTempFile::new` produces
+  `.tmpfile-{pid}-{name12}` (was `.tmpfile-{name12}` in the
+  unreleased `0.9.1` work). The new segment is what
+  `cleanup_orphans` parses to identify the owning process.
+  `with_prefix` outputs are unchanged. Callers that pattern-match
+  on the prefix (e.g., `starts_with(".tmp-")`) keep working;
+  callers that asserted on the exact basename length or segment
+  count would need to adapt.
 - `unique_name` graduated from `fn` to `pub(crate) fn` so the new
-  `named_file` module can call the same generator. Internal change;
-  no effect on the public API.
+  `named_file` and `cleanup` modules can call the same generator.
+  Internal change; no effect on the public API.
 - Module-level rustdoc in `src/lib.rs` now introduces both
-  `TempDir` and `NamedTempFile` and points at `NamedTempFile` for
-  the Windows handle-lock note.
-- `REPS.md` sections 2, 3, 4, 5 extended to cover `NamedTempFile`.
-- README updated: `NamedTempFile` is now part of the quick start,
-  the API listing, and the concurrency section. Default-basename
-  table added.
+  `TempDir` and `NamedTempFile` plus `cleanup_orphans`.
+- `REPS.md` sections 2 and 3 extended to cover `NamedTempFile` and
+  `cleanup_orphans`. The PID-encoded basename format is documented
+  in section 3.
+- README updated: quick start, API listing, default-basename
+  table, "Cleaning up after crashes" section, and roadmap.
+
+### Migration
+
+Callers that asserted on the v0.9.0 / v0.9.1 default basename
+shape need to know that `.tmp-{name12}` and `.tmpfile-{name12}`
+have become `.tmp-{pid}-{name12}` and `.tmpfile-{pid}-{name12}`.
+`starts_with(".tmp-")` and `starts_with(".tmpfile-")` continue to
+work; tests that parsed segment counts or basename lengths do not.
+`with_prefix(...)` output is unchanged. `cleanup_orphans` is
+purely additive.
 
 ### Documentation
 

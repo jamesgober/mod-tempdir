@@ -3,14 +3,17 @@
 //! Temporary directory and file management for Rust. Auto-cleanup on
 //! Drop, collision-resistant naming, cross-platform paths.
 //!
-//! Two types:
+//! Two types and one orphan-cleanup function:
 //!
 //! * [`TempDir`]: a directory created under the OS temp location,
 //!   recursively deleted on Drop.
 //! * [`NamedTempFile`]: a single file created under the OS temp
 //!   location, deleted on Drop.
+//! * [`cleanup_orphans`]: sweeps the OS temp directory for entries
+//!   left behind by crashed processes and removes those that are
+//!   both PID-dead and older than a caller-supplied age threshold.
 //!
-//! Both share the same name-generation pipeline, the same
+//! Both types share the same name-generation pipeline, the same
 //! `with_prefix` / `persist` / `cleanup_on_drop` API shape, and the
 //! same silent best-effort Drop semantics.
 //!
@@ -65,8 +68,10 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+mod cleanup;
 mod named_file;
 
+pub use cleanup::cleanup_orphans;
 pub use named_file::NamedTempFile;
 
 use std::io;
@@ -99,11 +104,13 @@ impl TempDir {
     /// Create a new temporary directory in the system's temp location
     /// (`/tmp` on Linux/macOS, `%TEMP%` on Windows).
     ///
-    /// The directory name is a fresh 12-character Crockford base32
-    /// string prefixed with `.tmp-`. With the `mod-rand` feature
-    /// enabled, naming comes from [`mod_rand::tier2::unique_name`][mr-tier2];
-    /// without it, naming comes from an internal process-unique mixer
-    /// (PID + nanosecond clock + atomic counter).
+    /// The basename is `.tmp-{pid}-{name12}` where `{pid}` is the
+    /// current process ID (used by [`cleanup_orphans`] to identify
+    /// entries left behind by crashed processes) and `{name12}` is a
+    /// 12-character Crockford base32 string from the shared name
+    /// generator. With the `mod-rand` feature enabled, the name
+    /// fragment comes from [`mod_rand::tier2::unique_name`][mr-tier2];
+    /// without it, from an internal process-unique mixer.
     ///
     /// # Errors
     ///
@@ -113,7 +120,8 @@ impl TempDir {
     /// [mr-tier2]: https://docs.rs/mod-rand/latest/mod_rand/tier2/fn.unique_name.html
     pub fn new() -> io::Result<Self> {
         let name = unique_name(12);
-        let path = std::env::temp_dir().join(format!(".tmp-{name}"));
+        let pid = std::process::id();
+        let path = std::env::temp_dir().join(format!(".tmp-{pid}-{name}"));
         std::fs::create_dir(&path)?;
         Ok(Self {
             path,
