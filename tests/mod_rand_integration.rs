@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mod_tempdir::{__unique_name_for_tests, TempDir};
+use mod_tempdir::{__unique_name_for_tests, NamedTempFile, TempDir};
 
 /// Crockford base32 alphabet: `0-9A-Z` minus `I, L, O, U`. Both the
 /// crate's built-in placeholder and `mod_rand::tier2::unique_name`
@@ -113,6 +113,35 @@ fn end_to_end_tempdir_paths_are_unique() {
         paths.len(),
         N,
         "end-to-end TempDir paths collided: {} unique out of {N}",
+        paths.len()
+    );
+}
+
+#[test]
+fn end_to_end_named_temp_file_paths_are_unique() {
+    // Parallel of the TempDir end-to-end check. Verifies the
+    // generator wiring inside `NamedTempFile::new()` produces unique
+    // paths when the `mod-rand` feature is enabled.
+    const N: usize = 100;
+
+    let mut files: Vec<NamedTempFile> = Vec::with_capacity(N);
+    let mut paths: HashSet<std::path::PathBuf> = HashSet::with_capacity(N);
+
+    for _ in 0..N {
+        let f = NamedTempFile::new().expect("NamedTempFile::new failed");
+        assert!(
+            f.path().is_file(),
+            "NamedTempFile reports {:?} but the path is not a regular file",
+            f.path()
+        );
+        paths.insert(f.path().to_path_buf());
+        files.push(f);
+    }
+
+    assert_eq!(
+        paths.len(),
+        N,
+        "end-to-end NamedTempFile paths collided: {} unique out of {N}",
         paths.len()
     );
 }

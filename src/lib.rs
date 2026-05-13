@@ -1,7 +1,18 @@
 //! # mod-tempdir
 //!
-//! Temporary directory management for Rust. Auto-cleanup on Drop,
-//! collision-resistant naming, cross-platform paths.
+//! Temporary directory and file management for Rust. Auto-cleanup on
+//! Drop, collision-resistant naming, cross-platform paths.
+//!
+//! Two types:
+//!
+//! * [`TempDir`]: a directory created under the OS temp location,
+//!   recursively deleted on Drop.
+//! * [`NamedTempFile`]: a single file created under the OS temp
+//!   location, deleted on Drop.
+//!
+//! Both share the same name-generation pipeline, the same
+//! `with_prefix` / `persist` / `cleanup_on_drop` API shape, and the
+//! same silent best-effort Drop semantics.
 //!
 //! Designed as a `tempfile` replacement at MSRV 1.75. The default
 //! build has zero runtime dependencies outside `std`. An optional
@@ -12,19 +23,24 @@
 //! ## Quick example
 //!
 //! ```no_run
-//! use mod_tempdir::TempDir;
+//! use mod_tempdir::{NamedTempFile, TempDir};
 //!
 //! let dir = TempDir::new().unwrap();
 //! // ... use dir.path() to do work ...
-//! // dir is automatically deleted when it goes out of scope
+//!
+//! let file = NamedTempFile::new().unwrap();
+//! // ... use file.path() to write into the file ...
+//!
+//! // Both are deleted automatically when they go out of scope.
 //! ```
 //!
 //! ## Feature flags
 //!
 //! * `mod-rand` (off by default): use [`mod_rand::tier2::unique_name`][mr-tier2]
-//!   for directory naming. The alphabet is Crockford base32 on both
-//!   paths, so any caller pattern-matching on the directory basename
-//!   keeps working unchanged when the feature is toggled.
+//!   for naming. The alphabet is Crockford base32 on both paths, so
+//!   any caller pattern-matching on the directory or file basename
+//!   keeps working unchanged when the feature is toggled. Applies to
+//!   both [`TempDir`] and [`NamedTempFile`].
 //!
 //! [mr-tier2]: https://docs.rs/mod-rand/latest/mod_rand/tier2/fn.unique_name.html
 //!
@@ -36,15 +52,22 @@
 //!
 //! ## Cleanup semantics
 //!
-//! `Drop::drop` recursively removes the directory via
-//! [`std::fs::remove_dir_all`]. Failures during cleanup (file in use,
-//! permission denied, network filesystem hiccup) are intentionally
-//! silent: a `Drop` impl must not panic. Use [`TempDir::persist`] to
-//! keep the directory alive past drop if you need to inspect it.
+//! `Drop::drop` removes the directory via
+//! [`std::fs::remove_dir_all`] (for [`TempDir`]) or the file via
+//! [`std::fs::remove_file`] (for [`NamedTempFile`]). Failures during
+//! cleanup (file in use, permission denied, network filesystem
+//! hiccup) are intentionally silent: a `Drop` impl must not panic.
+//! Use `persist()` to keep the entry alive past drop if you need to
+//! inspect it. See [`NamedTempFile`] for a Windows-specific note
+//! about open file handles.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
+
+mod named_file;
+
+pub use named_file::NamedTempFile;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -164,12 +187,12 @@ impl Drop for TempDir {
 
 #[cfg(feature = "mod-rand")]
 #[inline]
-fn unique_name(len: usize) -> String {
+pub(crate) fn unique_name(len: usize) -> String {
     mod_rand::tier2::unique_name(len)
 }
 
 #[cfg(not(feature = "mod-rand"))]
-fn unique_name(len: usize) -> String {
+pub(crate) fn unique_name(len: usize) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     const ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 

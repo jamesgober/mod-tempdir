@@ -1,4 +1,4 @@
-# mod-tempdir — Project Specification (REPS)
+# mod-tempdir: Project Specification (REPS)
 
 > Rust Engineering Project Specification.
 > Normative language follows RFC 2119.
@@ -12,8 +12,10 @@ for `tempfile`.
 ## 2. Core capabilities
 
 - Create temp directories in the OS's standard temp location.
-- Auto-delete (recursively) on Drop.
-- Collision-resistant naming.
+- Create temp files in the OS's standard temp location.
+- Auto-delete temp directories (recursively) on Drop.
+- Auto-delete temp files on Drop.
+- Collision-resistant naming, shared between directories and files.
 - Optional persistence (disable cleanup for debugging).
 - Optional prefix for tracking purposes.
 
@@ -31,6 +33,18 @@ impl TempDir {
 }
 
 impl Drop for TempDir { /* recursive cleanup */ }
+
+pub struct NamedTempFile { /* private */ }
+
+impl NamedTempFile {
+    pub fn new() -> io::Result<Self>;
+    pub fn with_prefix(prefix: &str) -> io::Result<Self>;
+    pub fn path(&self) -> &Path;
+    pub fn persist(self) -> PathBuf;
+    pub fn cleanup_on_drop(&self) -> bool;
+}
+
+impl Drop for NamedTempFile { /* remove_file */ }
 ```
 
 ## 4. Determinism
@@ -38,25 +52,43 @@ impl Drop for TempDir { /* recursive cleanup */ }
 - Directory creation MUST be idempotent in the sense that two
   concurrent `TempDir::new()` calls in the same process MUST NOT
   produce the same path (atomic counter guarantees this).
+- File creation MUST be idempotent in the same sense: two concurrent
+  `NamedTempFile::new()` calls in the same process MUST NOT produce
+  the same path. The shared name generator means a single guarantee
+  covers both types.
+- A `TempDir::new()` call and a concurrent `NamedTempFile::new()`
+  call MUST NOT collide. Distinct default basename prefixes
+  (`.tmp-` for directories, `.tmpfile-` for files) reinforce this
+  on top of the underlying name uniqueness.
 - Two processes MUST be extremely unlikely to produce the same path
   (PID + nanos varies).
 
 ## 5. Cleanup semantics
 
-- `Drop` MUST attempt recursive deletion via `std::fs::remove_dir_all`.
-- Deletion failures (file in use, permissions) MUST be silent —
-  don't panic in Drop.
-- `persist()` MUST disable cleanup so the directory survives drop.
+- `TempDir::drop` MUST attempt recursive deletion via
+  `std::fs::remove_dir_all`.
+- `NamedTempFile::drop` MUST attempt deletion via
+  `std::fs::remove_file`.
+- Deletion failures (file in use, permissions, Windows
+  `ERROR_SHARING_VIOLATION` from a caller-held handle) MUST be
+  silent. Drop MUST NOT panic.
+- `persist()` MUST disable cleanup so the directory or file
+  survives drop.
 
 ## 6. Dependencies
 
 This crate MUST NOT add any runtime dependency outside `std` in its
 default build. As of `0.9.0`, an optional dependency on `mod-rand`
 is available behind the `mod-rand` feature flag for uniformly
-distributed naming. Planned: an optional `fsys` dependency for
-cross-platform filesystem primitives in `0.9.1`, also behind a
-feature flag. No `tempfile`, `getrandom`, or `rand` direct
-dependencies, on any feature configuration.
+distributed naming. No `tempfile`, `getrandom`, or `rand` direct
+dependencies on any feature configuration.
+
+For filesystem operations (`mkdir`, `rmdir`, `rmdir_all`), this crate
+MUST use `std::fs` directly. These operations map to single OS
+syscalls and have no library-level optimization headroom. A prior
+plan to route them through `fsys` was retired (see ROADMAP.md
+"Note on the retired fsys integration milestone"); `std::fs` IS the
+fast path for these operations.
 
 ## 7. Out of scope
 
@@ -65,6 +97,10 @@ dependencies, on any feature configuration.
 - File-locking primitives (not our domain).
 - NFS / network filesystem edge cases (best-effort cleanup, document
   the limitation).
+- General filesystem operation speed-ups beyond `std::fs`. For
+  storage-engine workloads (durable writes, journal append, atomic
+  rename with fsync), use `fsys` directly from the calling crate;
+  `mod-tempdir` does not perform those workloads.
 
 ## 8. Stability
 

@@ -44,10 +44,9 @@ feature delegates name generation to `mod-rand::tier2` when you want
 uniformly distributed names from a separately maintained generator;
 the public API is identical either way.
 
-The current trade: no `NamedTempFile` companion type (just
-directories) and no cleanup-on-startup pass for orphaned dirs from
-crashed processes. Both are tracked for later releases in the
-`0.9.x` line.
+The current trade: no cleanup-on-startup pass for orphaned entries
+from crashed processes. Tracked for a later release in the `0.9.x`
+line.
 
 ## Quick start
 
@@ -57,12 +56,20 @@ mod-tempdir = "0.9"
 ```
 
 ```rust
-use mod_tempdir::TempDir;
+use mod_tempdir::{NamedTempFile, TempDir};
+use std::io::Write;
 
+// A temporary directory:
 let dir = TempDir::new()?;
 let file_path = dir.path().join("test.txt");
 std::fs::write(&file_path, b"hello")?;
 // `dir` and its contents are deleted at end of scope.
+
+// A standalone temporary file:
+let f = NamedTempFile::new()?;
+let mut h = std::fs::OpenOptions::new().write(true).open(f.path())?;
+h.write_all(b"hello")?;
+// `f` is deleted at end of scope.
 # Ok::<(), std::io::Error>(())
 ```
 
@@ -74,16 +81,39 @@ TempDir::with_prefix("test")    // -> io::Result<TempDir> with custom prefix
 dir.path()                       // -> &Path
 dir.persist()                    // -> PathBuf (disables cleanup)
 dir.cleanup_on_drop()            // -> bool
+
+NamedTempFile::new()             // -> io::Result<NamedTempFile>
+NamedTempFile::with_prefix("x")  // -> io::Result<NamedTempFile> with custom prefix
+file.path()                      // -> &Path
+file.persist()                   // -> PathBuf (disables cleanup)
+file.cleanup_on_drop()           // -> bool
 ```
 
-The signature surface has not changed since `0.1.0` and will not
-change again before `1.0.0`. Additions land as new methods only.
+Both types share the same `with_prefix` / `path` / `persist` /
+`cleanup_on_drop` shape, the same name-generation pipeline, and the
+same silent best-effort Drop semantics. The `TempDir` signature
+surface has not changed since `0.1.0`. `NamedTempFile` joins the
+public surface at `0.9.1` and is stable through the rest of the
+`0.9.x` line. The `1.0.0` release pins both.
+
+### Default basenames
+
+Default basenames are deliberately distinguishable so an operator
+inspecting the OS temp dir can tell entries apart at a glance:
+
+| Type            | Default basename             |
+|-----------------|------------------------------|
+| `TempDir`       | `.tmp-{12-char-name}`        |
+| `NamedTempFile` | `.tmpfile-{12-char-name}`    |
+
+Caller-supplied prefixes via `with_prefix` are joined verbatim and
+override the default.
 
 ## Feature flags
 
 | Flag       | Default | Effect |
 |------------|---------|--------|
-| `mod-rand` | off     | Use `mod_rand::tier2::unique_name` for directory naming. Adds one optional dependency (`mod-rand`, itself free of further deps). |
+| `mod-rand` | off     | Use `mod_rand::tier2::unique_name` for naming. Adds one optional dependency (`mod-rand`, itself free of further deps). Applies to both `TempDir` and `NamedTempFile`. |
 
 Default naming uses an internal mixer over the process ID, the
 nanosecond clock, and a per-process atomic counter. It is fast,
@@ -119,11 +149,12 @@ temp paths), generate one with `mod_rand::tier3` and pass it to
 
 ## Concurrency
 
-`TempDir::new()` and `TempDir::with_prefix()` are safe to call from
-many threads at once. The verification suite includes a stress test
-that fires 256 threads through a shared barrier and asserts every
-returned path is distinct. The same test runs on both feature
-configurations.
+Every public constructor (`TempDir::new`, `TempDir::with_prefix`,
+`NamedTempFile::new`, `NamedTempFile::with_prefix`) is safe to call
+from many threads at once. The verification suite includes paired
+stress tests that fire 256 threads through a shared barrier for each
+type and assert every returned path is distinct. Both stress tests
+run on both feature configurations.
 
 ## The `dev-*` and `mod-*` ecosystem
 
@@ -133,15 +164,21 @@ auto-cleanup temp dirs without pulling in `tempfile`'s dep tree.
 
 ## Roadmap
 
-`v0.9.0` ships the `mod-rand` integration. The public API is the
-one introduced in `v0.1.0`. Remaining items before `v1.0.0`:
+`v0.9.0` shipped the `mod-rand` integration. `v0.9.1` introduces
+`NamedTempFile`. Remaining items before `v1.0.0`:
 
-- `v0.9.1`: optional `fsys` integration for cross-platform
-  filesystem primitives
-- `v0.9.2`: `NamedTempFile` companion type
-- `v0.9.3`: cleanup-on-startup pass for orphaned dirs from crashed
-  processes
+- `v0.9.2`: cleanup-on-startup pass for orphaned dirs and files
+  from crashed processes
+- `v0.9.3+` (possible future): atomic file persistence
+  (`NamedTempFile::persist_atomic`) backed by `fsys`'s atomic-write
+  primitives, where they actually pay off
 - `v1.0.0`: API stabilization
+
+A previously planned `v0.9.1` milestone (routing directory
+operations through `fsys`) was retired after review: for
+single-syscall operations like `mkdir(2)` and `unlink(2)`, `std::fs`
+is already the fastest available path. See the project ROADMAP for
+the retirement note.
 
 ## Minimum supported Rust version
 
