@@ -94,9 +94,9 @@ cleanup_orphans(max_age_hours)   // -> io::Result<usize> (removed count)
 Both types share the same `with_prefix` / `path` / `persist` /
 `cleanup_on_drop` shape, the same name-generation pipeline, and the
 same silent best-effort Drop semantics. The `TempDir` signature
-surface has not changed since `0.1.0`. `NamedTempFile` joins the
-public surface at `0.9.1` and is stable through the rest of the
-`0.9.x` line. The `1.0.0` release pins both.
+surface has not changed since `0.1.0`. `NamedTempFile` and
+`cleanup_orphans` join the public surface in `0.9.2` and are stable
+through the rest of the `0.9.x` line. The `1.0.0` release pins them.
 
 ### Default basenames
 
@@ -200,20 +200,24 @@ auto-cleanup temp dirs without pulling in `tempfile`'s dep tree.
 
 ## Roadmap
 
-`v0.9.0` shipped the `mod-rand` integration. `v0.9.1` introduced
-`NamedTempFile`. `v0.9.2` adds `cleanup_orphans` plus PID-aware
-default basenames. Remaining items before `v1.0.0`:
+- `v0.9.0` shipped the `mod-rand` integration.
+- `v0.9.2` followed up with `NamedTempFile`, `cleanup_orphans`, and
+  PID-aware default basenames. The originally planned `v0.9.1`
+  (a separate `NamedTempFile` release) was bundled into `v0.9.2`;
+  no `v0.9.1` tag was published.
+
+Remaining items before `v1.0.0`:
 
 - `v0.9.3+` (possible future): atomic file persistence
   (`NamedTempFile::persist_atomic`) backed by `fsys`'s atomic-write
   primitives, where they actually pay off
 - `v1.0.0`: API stabilization
 
-A previously planned `v0.9.1` milestone (routing directory
-operations through `fsys`) was retired after review: for
-single-syscall operations like `mkdir(2)` and `unlink(2)`, `std::fs`
-is already the fastest available path. See the project ROADMAP for
-the retirement note.
+A very early plan for `v0.9.1` proposed routing directory operations
+through `fsys`; that idea was retired during the `0.9.x` line because
+for single-syscall operations like `mkdir(2)` and `unlink(2)`,
+`std::fs` is already the fastest available path. See the project
+ROADMAP for the retirement note.
 
 ## Minimum supported Rust version
 

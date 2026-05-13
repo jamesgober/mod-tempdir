@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-05-13
+
+### Note on version numbering
+
+This release bundles what was originally planned as two separate
+milestones (`v0.9.1` introducing `NamedTempFile`, `v0.9.2` introducing
+`cleanup_orphans`) into a single `0.9.2` cut. No `v0.9.1` tag was
+published. `v0.9.0` shipped on 2026-05-13 with the `mod-rand`
+integration; `v0.9.2` ships on the same date.
+
 ### Added
 
 - `cleanup_orphans(max_age_hours: u64) -> io::Result<usize>`: a
@@ -158,11 +168,12 @@ This is the name-claim release. Real implementations land in `0.9.x`:
 
 - `mod-rand::tier2` integration for collision-resistant naming
   (shipped in `0.9.0`)
-- `NamedTempFile` companion type (planned for `0.9.1`)
+- `NamedTempFile` companion type (shipped in `0.9.2`)
 - Cleanup-on-startup for orphaned dirs from crashed processes
-  (planned for `0.9.2`)
+  (shipped in `0.9.2`)
 - Windows file-lock retry logic
 
-[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.0...v0.9.2
 [0.9.0]: https://github.com/jamesgober/mod-tempdir/compare/v0.1.0...v0.9.0
 [0.1.0]: https://github.com/jamesgober/mod-tempdir/releases/tag/v0.1.0
