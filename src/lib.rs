@@ -21,10 +21,12 @@
 //!
 //! ## Feature flags
 //!
-//! * `mod-rand` (off by default): use [`mod_rand::tier2::unique_name`]
+//! * `mod-rand` (off by default): use [`mod_rand::tier2::unique_name`][mr-tier2]
 //!   for directory naming. The alphabet is Crockford base32 on both
 //!   paths, so any caller pattern-matching on the directory basename
 //!   keeps working unchanged when the feature is toggled.
+//!
+//! [mr-tier2]: https://docs.rs/mod-rand/latest/mod_rand/tier2/fn.unique_name.html
 //!
 //! To enable in `Cargo.toml`:
 //!
@@ -76,7 +78,7 @@ impl TempDir {
     ///
     /// The directory name is a fresh 12-character Crockford base32
     /// string prefixed with `.tmp-`. With the `mod-rand` feature
-    /// enabled, naming comes from [`mod_rand::tier2::unique_name`];
+    /// enabled, naming comes from [`mod_rand::tier2::unique_name`][mr-tier2];
     /// without it, naming comes from an internal process-unique mixer
     /// (PID + nanosecond clock + atomic counter).
     ///
@@ -84,6 +86,8 @@ impl TempDir {
     ///
     /// Returns the underlying [`io::Error`] from
     /// [`std::fs::create_dir`] if the directory cannot be created.
+    ///
+    /// [mr-tier2]: https://docs.rs/mod-rand/latest/mod_rand/tier2/fn.unique_name.html
     pub fn new() -> io::Result<Self> {
         let name = unique_name(12);
         let path = std::env::temp_dir().join(format!(".tmp-{name}"));
