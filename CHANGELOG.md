@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-05-13
+
+### Added
+
+- `NamedTempFile::persist_atomic(target) -> Result<PathBuf, PersistAtomicError>`:
+  atomically move the temp file to `target` with crash-safety
+  guarantees. Performs `fsync` on the source, an atomic
+  `std::fs::rename` (POSIX `rename(2)` / Windows `MoveFileExW` with
+  `MOVEFILE_REPLACE_EXISTING`), and a best-effort `fsync` of the
+  target's parent directory so the rename itself survives a crash.
+  Atomic within a single filesystem; cross-filesystem persistence
+  remains the caller's responsibility. **On failure, the temp file
+  is preserved on disk and the original `NamedTempFile` is returned
+  inside the error** so a retry path doesn't lose the source. This
+  matches the `tempfile` crate's persist API convention.
+- `PersistAtomicError { error: io::Error, file: NamedTempFile }`:
+  the structured error type returned by `persist_atomic` on failure.
+  Implements `Debug`, `Display`, `std::error::Error`, and a `From`
+  conversion to `io::Error` for callers that don't need the
+  recovered file.
+- `tests/persist_atomic.rs`: four integration tests covering basic
+  move + content preservation, replacement of an existing target,
+  the data-integrity error path (target's parent missing: source
+  survives, recovered file points at original temp path), and the
+  post-success invariant that nothing remains at the original temp
+  path.
+
+### Changed
+
+- README and REPS section 3 updated to include `persist_atomic` in
+  the public API surface.
+
+### Note on the deferred `fsys` integration
+
+The ROADMAP reserved a possible `v0.9.3+` `fsys` integration for
+atomic persistence. After auditing the `fsys` public API, the
+integration was not taken: `fsys`'s atomic-rename primitive
+(`fsys::platform::atomic_rename`) is `pub(crate)` and not callable
+from outside the crate, and its public alternative (`Handle::rename`)
+requires both paths to live under a single handle root, which does
+not fit a generic `temp_dir → arbitrary_target` move. `std::fs::rename`
+maps to the same OS primitives `fsys` uses internally (POSIX
+`rename(2)` on Unix, `MoveFileExW` on Windows), so the `std`-only
+path is functionally equivalent for this use case and keeps the
+default zero-dep build intact. Same architectural call as the
+retired `v0.9.1` fsys-for-directory-ops milestone: when `fsys`'s
+value-add lives in its internals rather than its public surface,
+adding the dep does not pay off.
+
 ## [0.9.2] - 2026-05-13
 
 ### Note on version numbering
@@ -173,7 +222,8 @@ This is the name-claim release. Real implementations land in `0.9.x`:
   (shipped in `0.9.2`)
 - Windows file-lock retry logic
 
-[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.0...v0.9.2
 [0.9.0]: https://github.com/jamesgober/mod-tempdir/compare/v0.1.0...v0.9.0
 [0.1.0]: https://github.com/jamesgober/mod-tempdir/releases/tag/v0.1.0

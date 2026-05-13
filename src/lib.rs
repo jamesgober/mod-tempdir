@@ -72,7 +72,7 @@ mod cleanup;
 mod named_file;
 
 pub use cleanup::cleanup_orphans;
-pub use named_file::NamedTempFile;
+pub use named_file::{NamedTempFile, PersistAtomicError};
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -116,6 +116,15 @@ impl TempDir {
     ///
     /// Returns the underlying [`io::Error`] from
     /// [`std::fs::create_dir`] if the directory cannot be created.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::TempDir;
+    ///
+    /// let dir = TempDir::new().unwrap();
+    /// assert!(dir.path().is_dir());
+    /// ```
     ///
     /// [mr-tier2]: https://docs.rs/mod-rand/latest/mod_rand/tier2/fn.unique_name.html
     pub fn new() -> io::Result<Self> {
@@ -163,6 +172,16 @@ impl TempDir {
     }
 
     /// Return the path of this temporary directory.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::TempDir;
+    ///
+    /// let dir = TempDir::new().unwrap();
+    /// let log = dir.path().join("output.log");
+    /// std::fs::write(&log, b"hello").unwrap();
+    /// ```
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -171,12 +190,32 @@ impl TempDir {
     /// on drop. The directory and its contents will persist.
     ///
     /// Use this when you want to inspect contents after a test fails.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::TempDir;
+    ///
+    /// let dir = TempDir::new().unwrap();
+    /// let kept = dir.persist();
+    /// // `kept` survives past the original `dir` going out of scope.
+    /// # std::fs::remove_dir_all(&kept).unwrap();
+    /// ```
     pub fn persist(mut self) -> PathBuf {
         self.cleanup_on_drop = false;
         self.path.clone()
     }
 
     /// Return `true` if the directory will be deleted on drop.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::TempDir;
+    ///
+    /// let dir = TempDir::new().unwrap();
+    /// assert!(dir.cleanup_on_drop());
+    /// ```
     pub fn cleanup_on_drop(&self) -> bool {
         self.cleanup_on_drop
     }

@@ -10,7 +10,7 @@ checksum = "9e9af1a78086d46ac7855b846c25282555181bdeeac5151390e8c4005350e140"
 
 [[package]]
 name = "mod-tempdir"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "mod-rand",
 ]

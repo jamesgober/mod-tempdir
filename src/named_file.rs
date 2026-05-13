@@ -146,6 +146,19 @@ impl NamedTempFile {
     }
 
     /// Return the path of this temporary file.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::NamedTempFile;
+    ///
+    /// let f = NamedTempFile::new().unwrap();
+    /// let mut handle = std::fs::OpenOptions::new()
+    ///     .write(true)
+    ///     .open(f.path())
+    ///     .unwrap();
+    /// # let _ = handle;
+    /// ```
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -155,15 +168,233 @@ impl NamedTempFile {
     ///
     /// Use this when you want to inspect contents after a test
     /// fails.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::NamedTempFile;
+    ///
+    /// let f = NamedTempFile::new().unwrap();
+    /// let kept = f.persist();
+    /// // `kept` survives past the original `f` going out of scope.
+    /// # std::fs::remove_file(&kept).unwrap();
+    /// ```
     pub fn persist(mut self) -> PathBuf {
         self.cleanup_on_drop = false;
         self.path.clone()
     }
 
     /// Return `true` if the file will be deleted on drop.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::NamedTempFile;
+    ///
+    /// let f = NamedTempFile::new().unwrap();
+    /// assert!(f.cleanup_on_drop());
+    /// ```
     pub fn cleanup_on_drop(&self) -> bool {
         self.cleanup_on_drop
     }
+
+    /// Atomically move this file to `target` with crash-safety
+    /// guarantees, then disable cleanup on drop.
+    ///
+    /// Performs the canonical "atomic durable write" sequence:
+    ///
+    /// 1. `fsync` the temp file contents to disk
+    ///    ([`std::fs::File::sync_all`]).
+    /// 2. Atomically rename the temp file onto `target` via
+    ///    [`std::fs::rename`]. On Unix this is `rename(2)`; on
+    ///    Windows it is `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`.
+    ///    Both are atomic within a single filesystem.
+    /// 3. Best-effort `fsync` of the target's parent directory so
+    ///    the rename itself survives a crash. Failures here are
+    ///    silent, matching the rest of the crate's durability story.
+    ///
+    /// On success, the temp file no longer exists at
+    /// [`path`](Self::path); the data lives at `target`. Cleanup on
+    /// drop is disabled and the consumed `self` does not attempt
+    /// removal.
+    ///
+    /// # Errors
+    ///
+    /// On any failure (fsync, rename, etc.), the temp file is
+    /// **preserved** on disk and returned to the caller via
+    /// [`PersistAtomicError::file`]. The caller can inspect the
+    /// underlying [`io::Error`], optionally fix the cause (e.g.,
+    /// create the missing parent directory), and retry. This is
+    /// the standard `tempfile`-crate pattern and matches the
+    /// data-integrity guarantee that a failed atomic-persist must
+    /// never lose the source.
+    ///
+    /// Common error causes:
+    /// - Target's parent directory does not exist.
+    /// - Target's parent is on a different filesystem (`EXDEV` on
+    ///   Unix, `ERROR_NOT_SAME_DEVICE` on Windows).
+    /// - Permission denied at the target location.
+    /// - Source temp file already removed (race with cleanup).
+    ///
+    /// # Cross-filesystem behaviour
+    ///
+    /// `rename` is atomic only within a single filesystem. If
+    /// `target` is on a different mount than the temp directory,
+    /// `rename` will return `EXDEV` on Unix or the equivalent on
+    /// Windows. Callers wanting cross-filesystem persistence must
+    /// either pick a `target` on the same filesystem as
+    /// [`std::env::temp_dir`] or do their own copy-and-delete.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::NamedTempFile;
+    /// use std::io::Write;
+    ///
+    /// let f = NamedTempFile::new().unwrap();
+    /// {
+    ///     let mut h = std::fs::OpenOptions::new()
+    ///         .write(true)
+    ///         .open(f.path())
+    ///         .unwrap();
+    ///     h.write_all(b"finalized payload").unwrap();
+    /// }
+    ///
+    /// let target = std::env::temp_dir().join("finalized.bin");
+    /// let landed = f.persist_atomic(&target).unwrap();
+    /// assert_eq!(landed, target);
+    /// # std::fs::remove_file(&landed).unwrap();
+    /// ```
+    ///
+    /// Retry pattern on recoverable error:
+    ///
+    /// ```no_run
+    /// use mod_tempdir::NamedTempFile;
+    ///
+    /// let mut f = NamedTempFile::new().unwrap();
+    /// let target = std::env::temp_dir().join("retry-target");
+    /// loop {
+    ///     match f.persist_atomic(&target) {
+    ///         Ok(_landed) => break,
+    ///         Err(e) => {
+    ///             eprintln!("persist failed: {}", e.error);
+    ///             // ... fix the underlying issue ...
+    ///             f = e.file; // recover the temp file and try again
+    ///             # break;
+    ///         }
+    ///     }
+    /// }
+    /// # std::fs::remove_file(&target).ok();
+    /// ```
+    pub fn persist_atomic(
+        mut self,
+        target: impl AsRef<Path>,
+    ) -> Result<PathBuf, PersistAtomicError> {
+        let target = target.as_ref();
+
+        // Step 1: fsync the source. A writable handle is needed for
+        // `sync_all` semantics on every platform we support. If
+        // either the open or the fsync fails, return `self` to the
+        // caller so the temp file is preserved.
+        match std::fs::OpenOptions::new().write(true).open(&self.path) {
+            Ok(handle) => {
+                if let Err(error) = handle.sync_all() {
+                    return Err(PersistAtomicError { error, file: self });
+                }
+            }
+            Err(error) => return Err(PersistAtomicError { error, file: self }),
+        }
+
+        // Step 2: atomic rename. `std::fs::rename` is POSIX
+        // `rename(2)` on Unix and `MoveFileExW` with
+        // `MOVEFILE_REPLACE_EXISTING` on Windows. Both are atomic
+        // within a single filesystem.
+        if let Err(error) = std::fs::rename(&self.path, target) {
+            return Err(PersistAtomicError { error, file: self });
+        }
+
+        // Step 3: best-effort fsync of the target's parent directory
+        // so the rename itself is durable across a crash. Failures
+        // are intentionally silent, matching the Drop philosophy.
+        if let Some(parent) = target.parent() {
+            let _ = sync_directory(parent);
+        }
+
+        // The temp file no longer exists at `self.path`. Disable
+        // cleanup explicitly so Drop does not attempt a no-op
+        // `remove_file` against a path that has moved.
+        self.cleanup_on_drop = false;
+
+        Ok(target.to_path_buf())
+    }
+}
+
+/// Error returned by [`NamedTempFile::persist_atomic`] when the
+/// atomic-persist sequence fails partway through.
+///
+/// The underlying [`io::Error`] is in [`PersistAtomicError::error`]
+/// and the original [`NamedTempFile`] is in
+/// [`PersistAtomicError::file`], preserved so the caller can retry
+/// or fall back to other cleanup logic without losing the source.
+#[derive(Debug)]
+pub struct PersistAtomicError {
+    /// The underlying I/O error that aborted the atomic persist.
+    pub error: io::Error,
+    /// The `NamedTempFile` that would have been moved, returned
+    /// intact so the caller can retry or drop it.
+    pub file: NamedTempFile,
+}
+
+impl std::fmt::Display for PersistAtomicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "atomic persist failed: {}", self.error)
+    }
+}
+
+impl std::error::Error for PersistAtomicError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+impl From<PersistAtomicError> for io::Error {
+    fn from(e: PersistAtomicError) -> Self {
+        e.error
+    }
+}
+
+/// Best-effort fsync of a directory. Used by
+/// [`NamedTempFile::persist_atomic`] to make the rename durable.
+///
+/// Linux / macOS: open the directory and call `sync_all` (`fsync` on
+/// the directory fd).
+///
+/// Windows: open with `FILE_FLAG_BACKUP_SEMANTICS` (required to get
+/// a directory handle) and call `sync_all`. Directory fsync semantics
+/// on NTFS are less load-bearing than on Unix; this is still
+/// best-effort.
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> io::Result<()> {
+    let dir = std::fs::File::open(path)?;
+    dir.sync_all()
+}
+
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    let dir = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    dir.sync_all()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn sync_directory(_path: &Path) -> io::Result<()> {
+    // No portable directory fsync primitive available on this
+    // platform; rename atomicity is the only durability guarantee.
+    Ok(())
 }
 
 impl Drop for NamedTempFile {

@@ -89,6 +89,7 @@ NamedTempFile::new()             // -> io::Result<NamedTempFile>
 NamedTempFile::with_prefix("x")  // -> io::Result<NamedTempFile> with custom prefix
 file.path()                      // -> &Path
 file.persist()                   // -> PathBuf (disables cleanup)
+file.persist_atomic(target)      // -> Result<PathBuf, PersistAtomicError> (atomic durable move, source preserved on failure)
 file.cleanup_on_drop()           // -> bool
 
 cleanup_orphans(max_age_hours)   // -> io::Result<usize> (removed count)
@@ -98,8 +99,10 @@ Both types share the same `with_prefix` / `path` / `persist` /
 `cleanup_on_drop` shape, the same name-generation pipeline, and the
 same silent best-effort Drop semantics. The `TempDir` signature
 surface has not changed since `0.1.0`. `NamedTempFile` and
-`cleanup_orphans` join the public surface in `0.9.2` and are stable
-through the rest of the `0.9.x` line. The `1.0.0` release pins them.
+`cleanup_orphans` joined the public surface in `0.9.2`;
+`NamedTempFile::persist_atomic` joins in `0.9.3`. All of it is
+stable through the rest of the `0.9.x` line; the `1.0.0` release
+pins everything.
 
 ### Default basenames
 
@@ -186,6 +189,55 @@ Caller-supplied `with_prefix` paths and legacy entries from earlier
 versions (without a PID segment in the basename) are never touched.
 The user's namespace and historical entries are off-limits.
 
+## Atomic persistence
+
+`NamedTempFile::persist_atomic(target)` is the finalize-with-durability
+counterpart to `persist`. It performs the canonical "atomic durable
+write" sequence so that either the previous version of `target` or
+the new contents survive a crash, never a half-written file:
+
+1. `fsync` the temp file to push its contents to disk.
+2. Atomic `std::fs::rename` onto `target` (`rename(2)` on Unix,
+   `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING` on Windows).
+3. Best-effort `fsync` of the target's parent directory so the
+   rename itself survives a crash.
+
+```rust
+use mod_tempdir::NamedTempFile;
+use std::io::Write;
+
+let f = NamedTempFile::new()?;
+{
+    let mut h = std::fs::OpenOptions::new().write(true).open(f.path())?;
+    h.write_all(b"finalized payload")?;
+}
+match f.persist_atomic("config.toml") {
+    Ok(landed) => {
+        // `landed` is the target path; cleanup-on-drop is disabled.
+    }
+    Err(e) => {
+        // The temp file is preserved on disk and the original
+        // NamedTempFile is in `e.file` so you can retry.
+        eprintln!("persist failed: {}", e.error);
+    }
+}
+# Ok::<(), std::io::Error>(())
+```
+
+On any failure (rename error, missing parent, cross-filesystem
+target), the temp file is **preserved** on disk and the original
+`NamedTempFile` is returned to the caller via the
+[`PersistAtomicError`] error type so a retry or fallback path
+doesn't lose the source. This matches the data-integrity guarantee
+of the `tempfile` crate's persist API.
+
+`rename` is atomic only within a single filesystem. If `target` is
+on a different mount than `std::env::temp_dir()`, `persist_atomic`
+returns `EXDEV` (Unix) or the Windows equivalent inside the
+`PersistAtomicError`. For cross-filesystem finalization, copy
+through the target filesystem first using `TempDir::with_prefix`
+rooted at the target's parent.
+
 ## Concurrency
 
 Every public constructor (`TempDir::new`, `TempDir::with_prefix`,
@@ -208,13 +260,18 @@ auto-cleanup temp dirs without pulling in `tempfile`'s dep tree.
   PID-aware default basenames. The originally planned `v0.9.1`
   (a separate `NamedTempFile` release) was bundled into `v0.9.2`;
   no `v0.9.1` tag was published.
+- `v0.9.3` added `NamedTempFile::persist_atomic` using `std::fs`
+  primitives (fsync + atomic rename + parent-dir fsync). A previously
+  reserved `fsys` integration for this milestone was audited and not
+  taken; `fsys`'s atomic-rename primitive is `pub(crate)` and its
+  public alternative requires a single-root handle, neither of which
+  fits the generic `temp_dir → arbitrary_target` move. `std::fs::rename`
+  invokes the same OS primitives `fsys` uses internally.
 
 Remaining items before `v1.0.0`:
 
-- `v0.9.3+` (possible future): atomic file persistence
-  (`NamedTempFile::persist_atomic`) backed by `fsys`'s atomic-write
-  primitives, where they actually pay off
-- `v1.0.0`: API stabilization
+- `v1.0.0`: API stabilization (final rustdoc pass, cross-platform CI
+  green on all three OSes, one downstream consumer integration)
 
 A very early plan for `v0.9.1` proposed routing directory operations
 through `fsys`; that idea was retired during the `0.9.x` line because

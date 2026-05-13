@@ -43,10 +43,16 @@ impl NamedTempFile {
     pub fn with_prefix(prefix: &str) -> io::Result<Self>;
     pub fn path(&self) -> &Path;
     pub fn persist(self) -> PathBuf;
+    pub fn persist_atomic(self, target: impl AsRef<Path>) -> Result<PathBuf, PersistAtomicError>;
     pub fn cleanup_on_drop(&self) -> bool;
 }
 
 impl Drop for NamedTempFile { /* remove_file */ }
+
+pub struct PersistAtomicError {
+    pub error: io::Error,
+    pub file: NamedTempFile,
+}
 
 pub fn cleanup_orphans(max_age_hours: u64) -> io::Result<usize>;
 ```
