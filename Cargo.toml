@@ -10,7 +10,7 @@ authors = [
     "James Gober <me@jamesgober.com>"
 ]
 
-description = "Temporary directory management for Rust. Auto-cleanup on Drop, collision-resistant naming, cross-platform paths. Zero runtime deps by default; opt-in mod-rand feature for uniformly distributed naming. tempfile replacement at MSRV 1.75."
+description = "Temporary directory and file management for Rust. Auto-cleanup on Drop, collision-resistant naming, orphan cleanup, cross-platform paths. Zero runtime deps by default; opt-in mod-rand feature for uniformly distributed naming. tempfile replacement at MSRV 1.75."
 
 keywords = [
     "tempfile",

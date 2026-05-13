@@ -1,4 +1,6 @@
 <h1 align="center">
+    <img width="99" alt="Rust logo" src="https://raw.githubusercontent.com/jamesgober/rust-collection/72baabd71f00e14aa9184efcb16fa3deddda3a0a/assets/rust-logo.svg">
+    <br>
     <strong>mod-tempdir</strong>
     <br>
     <sup><sub>TEMPORARY DIRECTORY MANAGEMENT FOR RUST</sub></sup>
@@ -8,6 +10,7 @@
     <a href="https://crates.io/crates/mod-tempdir"><img alt="crates.io" src="https://img.shields.io/crates/v/mod-tempdir.svg"></a>
     <a href="https://crates.io/crates/mod-tempdir"><img alt="downloads" src="https://img.shields.io/crates/d/mod-tempdir.svg"></a>
     <a href="https://docs.rs/mod-tempdir"><img alt="docs.rs" src="https://docs.rs/mod-tempdir/badge.svg"></a>
+    <img alt="MSRV" src="https://img.shields.io/badge/MSRV-1.75%2B-blue.svg?style=flat-square" title="Rust Version">
     <a href="https://github.com/jamesgober/mod-tempdir/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jamesgober/mod-tempdir/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
@@ -226,3 +229,13 @@ ROADMAP for the retirement note.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+
+
+<!-- COPYRIGHT
+---------------------------------->
+<div align="center">
+  <br>
+  <h2></h2>
+  Copyright &copy; 2026 James Gober.
+</div>
