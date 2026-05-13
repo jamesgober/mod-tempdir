@@ -50,10 +50,13 @@ impl Drop for TempDir { /* recursive cleanup */ }
 
 ## 6. Dependencies
 
-This crate MUST NOT have runtime dependencies outside `std` in
-`v0.1.0`. In `0.9.x`, optional dependencies on `mod-rand` (for
-better naming) and `fsys` (for better filesystem primitives) may
-be added behind feature flags.
+This crate MUST NOT add any runtime dependency outside `std` in its
+default build. As of `0.9.0`, an optional dependency on `mod-rand`
+is available behind the `mod-rand` feature flag for uniformly
+distributed naming. Planned: an optional `fsys` dependency for
+cross-platform filesystem primitives in `0.9.1`, also behind a
+feature flag. No `tempfile`, `getrandom`, or `rand` direct
+dependencies, on any feature configuration.
 
 ## 7. Out of scope
 

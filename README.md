@@ -13,34 +13,47 @@
 
 <p align="center">
     Auto-cleanup on Drop. Collision-resistant naming. Cross-platform paths.<br>
-    Zero external dependencies. <code>tempfile</code> replacement at MSRV 1.75.
+    Zero runtime deps in the default build. <code>tempfile</code> replacement at MSRV 1.75.
 </p>
 
 ---
 
 ## What it does
 
-Creates temporary directories, gives you the path, and automatically
-deletes them (recursively) when the handle goes out of scope. Cross-
-platform: uses `%TEMP%` on Windows, `/tmp` on Linux/macOS.
+Creates a temporary directory, hands you the path, and deletes it
+(recursively) when the handle goes out of scope. The OS-standard
+temp location is used on every supported platform: `%TEMP%` on
+Windows, `/tmp` on Linux and macOS, anywhere `std::env::temp_dir()`
+points elsewhere.
+
+Cleanup is best-effort. A failure during drop (file still held open,
+permission denied, network filesystem hiccup) is silent: a `Drop`
+impl must not panic. Use `persist()` if you want the directory to
+survive past drop so you can inspect it.
 
 ## Why a tempfile replacement
 
 The `tempfile` crate pulls in `getrandom 0.4`, which uses
-`edition2024` and requires Rust 1.85+. For projects with broader
-MSRV targets, this is a real cost.
+`edition2024` and requires Rust 1.85+. If your project supports an
+older MSRV, that single dependency forces the rest of your build to
+follow.
 
-`mod-tempdir` provides the same core functionality with MSRV 1.75
-and zero external dependencies. The trade: no `NamedTempFile` (just
-directories for now), no cleanup-on-startup for orphaned dirs from
-crashed processes. Both can be added in later releases if there's
-demand.
+`mod-tempdir` provides the same core capability at MSRV 1.75. The
+default build has zero runtime dependencies outside `std`. An opt-in
+feature delegates name generation to `mod-rand::tier2` when you want
+uniformly distributed names from a separately maintained generator;
+the public API is identical either way.
+
+The current trade: no `NamedTempFile` companion type (just
+directories) and no cleanup-on-startup pass for orphaned dirs from
+crashed processes. Both are tracked for later releases in the
+`0.9.x` line.
 
 ## Quick start
 
 ```toml
 [dependencies]
-mod-tempdir = "0.1"
+mod-tempdir = "0.9"
 ```
 
 ```rust
@@ -56,24 +69,61 @@ std::fs::write(&file_path, b"hello")?;
 ## API
 
 ```rust
-TempDir::new()                  // → io::Result<TempDir>
-TempDir::with_prefix("test")    // → io::Result<TempDir> with custom prefix
-dir.path()                       // → &Path
-dir.persist()                    // → PathBuf (disables cleanup)
-dir.cleanup_on_drop()            // → bool
+TempDir::new()                  // -> io::Result<TempDir>
+TempDir::with_prefix("test")    // -> io::Result<TempDir> with custom prefix
+dir.path()                       // -> &Path
+dir.persist()                    // -> PathBuf (disables cleanup)
+dir.cleanup_on_drop()            // -> bool
+```
+
+The signature surface has not changed since `0.1.0` and will not
+change again before `1.0.0`. Additions land as new methods only.
+
+## Feature flags
+
+| Flag       | Default | Effect |
+|------------|---------|--------|
+| `mod-rand` | off     | Use `mod_rand::tier2::unique_name` for directory naming. Adds one optional dependency (`mod-rand`, itself free of further deps). |
+
+Default naming uses an internal mixer over the process ID, the
+nanosecond clock, and a per-process atomic counter. It is fast,
+collision-free within a process, and good enough for test fixtures.
+
+The `mod-rand` feature swaps that mixer for `mod_rand::tier2`, a
+SplitMix + Stafford-finisher pipeline that produces a uniform
+distribution across the alphabet without changing how names look
+on disk. Enable when you want the stronger statistical properties
+of a tested generator. Both paths use the same Crockford base32
+alphabet (`0-9A-Z` minus `I`, `L`, `O`, `U`), so a caller that
+inspects directory basenames keeps working when the feature is
+toggled.
+
+```toml
+[dependencies]
+mod-tempdir = { version = "0.9", features = ["mod-rand"] }
 ```
 
 ## How it picks unique names
 
 By default, the name is derived from:
+
 - Process ID (`PID`)
 - Current nanosecond timestamp
-- Atomic counter (guarantees uniqueness within a process)
+- An atomic counter that guarantees uniqueness within a process
 
-This is collision-resistant enough for test fixtures. **It is NOT
-cryptographically secure** — if you need crypto-quality random
-names (for security-sensitive temp files), wait for the
-`mod-rand::tier3` integration in `0.9.x`.
+This is collision-resistant enough for test fixtures and concurrent
+local work. It is **not** cryptographically secure. If you need
+crypto-quality random names (for example, for security-sensitive
+temp paths), generate one with `mod_rand::tier3` and pass it to
+`TempDir::with_prefix`.
+
+## Concurrency
+
+`TempDir::new()` and `TempDir::with_prefix()` are safe to call from
+many threads at once. The verification suite includes a stress test
+that fires 256 threads through a shared barrier and asserts every
+returned path is distinct. The same test runs on both feature
+configurations.
 
 ## The `dev-*` and `mod-*` ecosystem
 
@@ -81,20 +131,21 @@ This crate is the foundation for `dev-fixtures`'s temporary working
 directories. It also slots cleanly into any project that needs
 auto-cleanup temp dirs without pulling in `tempfile`'s dep tree.
 
-## Status
+## Roadmap
 
-`v0.1.0` is the name-claim release. Real implementations of:
+`v0.9.0` ships the `mod-rand` integration. The public API is the
+one introduced in `v0.1.0`. Remaining items before `v1.0.0`:
 
-- Collision-resistant naming via `mod-rand::tier2`
-- `fsys`-based filesystem primitives for performance
-- Cleanup-on-startup for orphaned dirs from crashed processes
-- Windows file-lock retry logic
-
-land in `0.9.x`.
+- `v0.9.1`: optional `fsys` integration for cross-platform
+  filesystem primitives
+- `v0.9.2`: `NamedTempFile` companion type
+- `v0.9.3`: cleanup-on-startup pass for orphaned dirs from crashed
+  processes
+- `v1.0.0`: API stabilization
 
 ## Minimum supported Rust version
 
-`1.75` — pinned in `Cargo.toml` and verified by CI.
+`1.75`. Pinned in `Cargo.toml` and verified by CI on every push.
 
 ## License
 

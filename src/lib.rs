@@ -3,8 +3,11 @@
 //! Temporary directory management for Rust. Auto-cleanup on Drop,
 //! collision-resistant naming, cross-platform paths.
 //!
-//! Designed as a `tempfile` replacement at MSRV 1.75 with zero
-//! external dependencies.
+//! Designed as a `tempfile` replacement at MSRV 1.75. The default
+//! build has zero runtime dependencies outside `std`. An optional
+//! `mod-rand` feature swaps the built-in name mixer for
+//! `mod_rand::tier2::unique_name`, which produces a uniformly
+//! distributed name from a SplitMix + Stafford-finisher pipeline.
 //!
 //! ## Quick example
 //!
@@ -16,10 +19,26 @@
 //! // dir is automatically deleted when it goes out of scope
 //! ```
 //!
-//! ## Status
+//! ## Feature flags
 //!
-//! `v0.1.0` is the name-claim release. Real implementation lands in
-//! `0.9.x` using fsys for the filesystem primitives.
+//! * `mod-rand` (off by default): use [`mod_rand::tier2::unique_name`]
+//!   for directory naming. The alphabet is Crockford base32 on both
+//!   paths, so any caller pattern-matching on the directory basename
+//!   keeps working unchanged when the feature is toggled.
+//!
+//! To enable in `Cargo.toml`:
+//!
+//! ```toml
+//! mod-tempdir = { version = "0.9", features = ["mod-rand"] }
+//! ```
+//!
+//! ## Cleanup semantics
+//!
+//! `Drop::drop` recursively removes the directory via
+//! [`std::fs::remove_dir_all`]. Failures during cleanup (file in use,
+//! permission denied, network filesystem hiccup) are intentionally
+//! silent: a `Drop` impl must not panic. Use [`TempDir::persist`] to
+//! keep the directory alive past drop if you need to inspect it.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
@@ -27,7 +46,10 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+
+#[cfg(not(feature = "mod-rand"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(feature = "mod-rand"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A temporary directory that auto-deletes when dropped.
@@ -52,8 +74,16 @@ impl TempDir {
     /// Create a new temporary directory in the system's temp location
     /// (`/tmp` on Linux/macOS, `%TEMP%` on Windows).
     ///
-    /// In `0.1.0` this is a placeholder using a deterministic name
-    /// pattern. Real collision-resistant naming lands in `0.9.x`.
+    /// The directory name is a fresh 12-character Crockford base32
+    /// string prefixed with `.tmp-`. With the `mod-rand` feature
+    /// enabled, naming comes from [`mod_rand::tier2::unique_name`];
+    /// without it, naming comes from an internal process-unique mixer
+    /// (PID + nanosecond clock + atomic counter).
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`io::Error`] from
+    /// [`std::fs::create_dir`] if the directory cannot be created.
     pub fn new() -> io::Result<Self> {
         let name = unique_name(12);
         let path = std::env::temp_dir().join(format!(".tmp-{name}"));
@@ -65,6 +95,28 @@ impl TempDir {
     }
 
     /// Create a new temporary directory with the given prefix.
+    ///
+    /// The final basename is `{prefix}-{12-char-name}`. The prefix is
+    /// joined verbatim and is the caller's responsibility to sanitize.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`io::Error`] from
+    /// [`std::fs::create_dir`] if the directory cannot be created.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mod_tempdir::TempDir;
+    ///
+    /// let dir = TempDir::with_prefix("my-app").unwrap();
+    /// assert!(dir
+    ///     .path()
+    ///     .file_name()
+    ///     .unwrap()
+    ///     .to_string_lossy()
+    ///     .starts_with("my-app-"));
+    /// ```
     pub fn with_prefix(prefix: &str) -> io::Result<Self> {
         let name = unique_name(12);
         let path = std::env::temp_dir().join(format!("{prefix}-{name}"));
@@ -98,11 +150,21 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         if self.cleanup_on_drop {
+            // Cleanup is best-effort and must not panic in Drop. Any
+            // filesystem error (file in use, permission denied) is
+            // intentionally swallowed per REPS section 5.
             let _ = std::fs::remove_dir_all(&self.path);
         }
     }
 }
 
+#[cfg(feature = "mod-rand")]
+#[inline]
+fn unique_name(len: usize) -> String {
+    mod_rand::tier2::unique_name(len)
+}
+
+#[cfg(not(feature = "mod-rand"))]
 fn unique_name(len: usize) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     const ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -114,8 +176,8 @@ fn unique_name(len: usize) -> String {
         .unwrap_or(0);
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    // Placeholder mixing. Real mix function (using mod-rand::tier2)
-    // lands in 0.9.x.
+    // Placeholder mixing. The `mod-rand` feature replaces this entire
+    // function with `mod_rand::tier2::unique_name`.
     let mut state = pid.wrapping_mul(0x9E3779B97F4A7C15)
         ^ nanos.wrapping_mul(0xBF58476D1CE4E5B9)
         ^ counter.wrapping_mul(0x94D049BB133111EB);
@@ -129,6 +191,20 @@ fn unique_name(len: usize) -> String {
         }
     }
     out
+}
+
+/// Internal test hook. **Not part of the stable public API.** This
+/// symbol exists only to let this crate's integration tests exercise
+/// the name generator without paying for a filesystem syscall per
+/// sample. External code must not call it; it may be renamed or
+/// removed in any release, including a patch.
+///
+/// Only compiled when the `mod-rand` feature is enabled, since that is
+/// the only test file that needs it.
+#[cfg(feature = "mod-rand")]
+#[doc(hidden)]
+pub fn __unique_name_for_tests(len: usize) -> String {
+    unique_name(len)
 }
 
 #[cfg(test)]

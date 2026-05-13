@@ -1,6 +1,6 @@
 [package]
 name = "mod-tempdir"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.75"
 readme = "README.md"
@@ -10,7 +10,7 @@ authors = [
     "James Gober <me@jamesgober.com>"
 ]
 
-description = "Temporary directory management for Rust. Auto-cleanup on Drop, collision-resistant naming, cross-platform paths. Zero external dependencies. tempfile replacement targeting MSRV 1.75."
+description = "Temporary directory management for Rust. Auto-cleanup on Drop, collision-resistant naming, cross-platform paths. Zero runtime deps by default; opt-in mod-rand feature for uniformly distributed naming. tempfile replacement at MSRV 1.75."
 
 keywords = [
     "tempfile",
@@ -34,11 +34,16 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+mod-rand = { version = "0.9.5", optional = true, default-features = false, features = ["tier2"] }
 
 [dev-dependencies]
 
 [features]
 default = []
+# Use `mod_rand::tier2::unique_name` for directory naming. Adds one
+# optional dependency (`mod-rand`, zero further transitive deps). Off
+# by default to preserve the v0.1.0 zero-runtime-dep promise.
+mod-rand = ["dep:mod-rand"]
 
 [profile.release]
 opt-level = 3
