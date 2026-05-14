@@ -121,5 +121,16 @@ fast path for these operations.
 
 ## 8. Stability
 
-Through `0.9.x` the public API MAY shift. The `1.0` release pins the
-API.
+As of `v1.0.0` (released 2026-05-13), the public API is pinned.
+Breaking changes MUST require a major-version bump per SemVer.
+Additive surface (new methods on existing types, new free functions,
+new types) MUST bump the minor version. Bug fixes and doc-only
+improvements MUST bump the patch version. MSRV stays at Rust `1.75`
+within the `1.x` line; any MSRV change ships in a minor release with
+notice.
+
+The `mod-rand` feature flag is part of the stable surface. Default
+basename formats (`.tmp-{pid}-{name12}` for `TempDir`,
+`.tmpfile-{pid}-{name12}` for `NamedTempFile`) are part of the
+stable contract. `cleanup_orphans` parses them. Through the `0.9.x`
+line the API MAY have shifted; from `1.0.0` it does not.
