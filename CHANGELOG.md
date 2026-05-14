@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-13
+
+### Stable API declaration
+
+`v1.0.0` is the trust handshake. The public API surface is
+identical to `v0.9.3`: `TempDir`, `NamedTempFile`,
+`PersistAtomicError`, and the top-level `cleanup_orphans` function.
+No new features ship in this release; no signatures change. From
+this version forward, breaking changes require a major-version
+bump per SemVer.
+
+### Stability commitment
+
+- Breaking API changes require `2.0.0`.
+- Additive surface (new methods, new free functions, new types)
+  bumps the minor version.
+- Bug fixes and doc-only changes bump the patch version.
+- MSRV stays at Rust `1.75` within the `1.x` line; any MSRV change
+  ships in a minor release with notice.
+- The `mod-rand` feature flag is part of the stable surface.
+- Default basename formats (`.tmp-{pid}-{name12}` for `TempDir`,
+  `.tmpfile-{pid}-{name12}` for `NamedTempFile`) are part of the
+  stable contract. `cleanup_orphans` parses them.
+
+### Changed (vs. `v0.9.3` published artifact)
+
+- README "Why a tempfile replacement" paragraph rewritten: the
+  stale "no cleanup-on-startup pass" sentence is replaced with a
+  pointer to the `cleanup_orphans` section. `cleanup_orphans`
+  has been live since `v0.9.2`; the README text predated it.
+- `PersistAtomicError` struct rustdoc gains an `# Example` block
+  showing the destructured-recovery pattern (`Err(PersistAtomicError
+  { error, file }) => ...`). The struct already had rustdoc; this
+  satisfies DIRECTIVES section 4 (every public item carries at
+  least one example).
+
+Both deltas first landed as `1b890e9 chore: pre-release audit for
+v0.9.3` and were carried on `main` past the `v0.9.3` tag; this is
+the first crates.io / docs.rs cut that includes them.
+
 ## [0.9.3] - 2026-05-13
 
 ### Added
@@ -222,7 +262,8 @@ This is the name-claim release. Real implementations land in `0.9.x`:
   (shipped in `0.9.2`)
 - Windows file-lock retry logic
 
-[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.3...v1.0.0
 [0.9.3]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.0...v0.9.2
 [0.9.0]: https://github.com/jamesgober/mod-tempdir/compare/v0.1.0...v0.9.0

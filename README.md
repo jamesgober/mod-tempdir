@@ -58,7 +58,7 @@ this crate with a storage-engine library like `fsys`.
 
 ```toml
 [dependencies]
-mod-tempdir = "0.9"
+mod-tempdir = "1"
 ```
 
 ```rust
@@ -103,9 +103,9 @@ Both types share the same `with_prefix` / `path` / `persist` /
 same silent best-effort Drop semantics. The `TempDir` signature
 surface has not changed since `0.1.0`. `NamedTempFile` and
 `cleanup_orphans` joined the public surface in `0.9.2`;
-`NamedTempFile::persist_atomic` joins in `0.9.3`. All of it is
-stable through the rest of the `0.9.x` line; the `1.0.0` release
-pins everything.
+`NamedTempFile::persist_atomic` in `0.9.3`. As of `1.0.0` the
+entire public API is pinned: breaking changes require a major
+bump.
 
 ### Default basenames
 
@@ -144,7 +144,7 @@ toggled.
 
 ```toml
 [dependencies]
-mod-tempdir = { version = "0.9", features = ["mod-rand"] }
+mod-tempdir = { version = "1", features = ["mod-rand"] }
 ```
 
 ## How it picks unique names
@@ -270,11 +270,10 @@ auto-cleanup temp dirs without pulling in `tempfile`'s dep tree.
   public alternative requires a single-root handle, neither of which
   fits the generic `temp_dir → arbitrary_target` move. `std::fs::rename`
   invokes the same OS primitives `fsys` uses internally.
-
-Remaining items before `v1.0.0`:
-
-- `v1.0.0`: API stabilization (final rustdoc pass, cross-platform CI
-  green on all three OSes, one downstream consumer integration)
+- **`v1.0.0` pins the public API.** From this release forward,
+  breaking changes require a major-version bump per SemVer.
+  Additive surface goes to a minor version; bug fixes and doc
+  improvements to a patch.
 
 A very early plan for `v0.9.1` proposed routing directory operations
 through `fsys`; that idea was retired during the `0.9.x` line because
