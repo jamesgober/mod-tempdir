@@ -336,6 +336,24 @@ impl NamedTempFile {
 /// and the original [`NamedTempFile`] is in
 /// [`PersistAtomicError::file`], preserved so the caller can retry
 /// or fall back to other cleanup logic without losing the source.
+///
+/// # Example
+///
+/// ```no_run
+/// use mod_tempdir::{NamedTempFile, PersistAtomicError};
+///
+/// fn persist_or_log(f: NamedTempFile, target: &str) {
+///     match f.persist_atomic(target) {
+///         Ok(landed) => println!("persisted to {}", landed.display()),
+///         Err(PersistAtomicError { error, file }) => {
+///             eprintln!("persist failed: {error}");
+///             // `file` is the original NamedTempFile, intact.
+///             // It will be cleaned up on Drop, or you can retry.
+///             drop(file);
+///         }
+///     }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct PersistAtomicError {
     /// The underlying I/O error that aborted the atomic persist.

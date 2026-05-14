@@ -47,9 +47,12 @@ feature delegates name generation to `mod-rand::tier2` when you want
 uniformly distributed names from a separately maintained generator;
 the public API is identical either way.
 
-The current trade: no cleanup-on-startup pass for orphaned entries
-from crashed processes. Tracked for a later release in the `0.9.x`
-line.
+If a process crashes before `Drop` can run, the orphaned temp
+entries are not lost forever: `cleanup_orphans` (see the
+"Cleaning up after crashes" section below) sweeps them on
+demand. Cross-filesystem persistence and OS-level filesystem
+ops beyond `std::fs` remain out of scope; for those, compose
+this crate with a storage-engine library like `fsys`.
 
 ## Quick start
 
