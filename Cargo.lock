@@ -4,13 +4,13 @@ version = 3
 
 [[package]]
 name = "mod-rand"
-version = "0.9.5"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e9af1a78086d46ac7855b846c25282555181bdeeac5151390e8c4005350e140"
+checksum = "4a80b508fa38c5f39796f957b58b2f65227600f3bfb461c8d968e7babddb9a37"
 
 [[package]]
 name = "mod-tempdir"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "mod-rand",
 ]

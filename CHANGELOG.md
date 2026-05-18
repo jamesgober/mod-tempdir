@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-18
+
+### Changed
+
+- Optional `mod-rand` dependency bumped from `0.9.5` to `1.0`.
+  `mod-rand 1.0.0` is a strict superset of `0.9.5`; the
+  `mod_rand::tier2::unique_name` function this crate uses is part
+  of `mod-rand`'s 1.x SemVer-locked surface (see
+  [mod-rand `docs/STABILITY.md`](https://github.com/jamesgober/mod-rand/blob/main/docs/STABILITY.md)).
+  Naming output, alphabet, length, and Drop semantics are
+  unchanged.
+
+### Compatibility
+
+- No public API change in `mod-tempdir`. Callers depending on
+  `mod-tempdir 1.0.0` upgrade by version bump only; no source
+  changes.
+- Default builds (no `mod-rand` feature) are entirely unaffected —
+  `mod-rand` is gated on the optional feature and the no-feature
+  path still uses the built-in placeholder generator.
+- MSRV stays at Rust `1.75`. `mod-rand 1.0` also pins to `1.75`
+  with no MSRV bump.
+
 ## [1.0.0] - 2026-05-13
 
 ### Stable API declaration
@@ -262,7 +285,8 @@ This is the name-claim release. Real implementations land in `0.9.x`:
   (shipped in `0.9.2`)
 - Windows file-lock retry logic
 
-[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.3...v1.0.0
 [0.9.3]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.0...v0.9.2
