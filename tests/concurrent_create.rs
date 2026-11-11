@@ -1,7 +1,7 @@
 // Stress test: many threads call `TempDir::new()` simultaneously and
 // must each receive a unique path. Runs on both feature configurations
 // (default and `mod-rand`) so the collision guarantee is verified for
-// both the placeholder generator and the `mod_rand::tier2` generator.
+// both the default `std` name path and the `mod_rand::tier3` path.
 
 use std::collections::HashSet;
 use std::path::PathBuf;

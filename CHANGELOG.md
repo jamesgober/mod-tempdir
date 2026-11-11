@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-11
+
+### Security
+
+- Temporary files are now created exclusively
+  (`OpenOptions::create_new`) and never open, truncate or follow an
+  entry that already exists at the chosen path. A taken path gets a
+  fresh name, up to 64 attempts.
+- Names now come from the operating system's random source in every
+  build. The default build reads it through `std` (`RandomState`
+  keys); the `mod-rand` feature reads it through `mod_rand::tier3`.
+- Private permissions on Unix: files are created `0600` and
+  directories `0700`. On Windows, entries inherit the ACL of their
+  parent directory (the default `%TEMP%` is private to the user);
+  this is documented in the crate docs and README.
+- `with_prefix` rejects a prefix containing a path separator (`/` or
+  `\`), `..`, a NUL byte, or (on Windows) `:`, with
+  `io::ErrorKind::InvalidInput`, so entries always stay inside their
+  parent directory.
+
+### Added
+
+- `TempDir::new_in(dir)` and `NamedTempFile::new_in(dir)`: create the
+  entry under a directory of your choice. Use
+  `NamedTempFile::new_in(target_dir)` before `persist_atomic` so the
+  rename stays on one filesystem.
+- `TempDir::with_prefix_in(dir, prefix)` and
+  `NamedTempFile::with_prefix_in(dir, prefix)`.
+
+### Changed
+
+- The optional `mod-rand` dependency now enables `mod-rand`'s `tier3`
+  feature (OS random source) instead of `tier2`. No new dependency.
+- Rustdoc examples for the constructors run as doctests, and the
+  README quick start writes the temp file with `std::fs::write`.
+
+### Compatibility
+
+- No signature changes. Basename formats (`.tmp-{pid}-{name12}`,
+  `.tmpfile-{pid}-{name12}`, `{prefix}-{name12}`) and the alphabet are
+  unchanged, so `cleanup_orphans` and any basename matching keep
+  working.
+- A `with_prefix` call that passed a path separator or `..` now
+  returns an error instead of creating the entry outside the temp
+  directory.
+- Code that opened a `NamedTempFile` path expecting group or world
+  read access on Unix must now grant it explicitly.
+- MSRV stays at Rust `1.75`.
+
 ## [1.0.1] - 2026-05-18
 
 ### Changed
@@ -285,7 +334,8 @@ This is the name-claim release. Real implementations land in `0.9.x`:
   (shipped in `0.9.2`)
 - Windows file-lock retry logic
 
-[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.3...v1.0.0
 [0.9.3]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.2...v0.9.3

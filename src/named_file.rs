@@ -1,46 +1,42 @@
 //! Temporary file management. See [`NamedTempFile`].
 //!
 //! Companion module to the crate root, which owns [`crate::TempDir`].
-//! Both types share the internal [`crate::unique_name`] generator so
-//! the `mod-rand` feature controls naming for files and directories
-//! in lockstep.
+//! Both types share the internal name generator and the exclusive
+//! create-and-retry loop, so the `mod-rand` feature controls naming
+//! for files and directories in lockstep.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::unique_name;
+use crate::{create_unique, validate_prefix};
 
 /// A temporary file that auto-deletes when dropped.
 ///
 /// Companion to [`crate::TempDir`]. Where `TempDir` manages a
 /// directory, `NamedTempFile` manages a single zero-byte file at a
-/// fresh path under the OS temp location. The caller reopens the
-/// path with [`std::fs::OpenOptions`] (or any other API) when ready
-/// to write or read.
+/// fresh path under the OS temp location (or a directory chosen with
+/// [`NamedTempFile::new_in`]). The caller writes or reads the path
+/// with [`std::fs::write`], [`std::fs::OpenOptions`], or any other
+/// API.
 ///
 /// The default basename is `.tmpfile-{pid}-{name12}`, intentionally
 /// distinct from [`TempDir`](crate::TempDir)'s `.tmp-{pid}-{name12}`
 /// so an operator inspecting the OS temp location can tell the two
-/// apart at a glance. The 12 trailing characters use the same
-/// Crockford base32 generator as `TempDir`, so the optional
+/// apart at a glance. The 12 trailing characters come from the same
+/// OS-random Crockford base32 generator as `TempDir`, so the optional
 /// `mod-rand` feature controls both types in lockstep. The embedded
 /// PID lets [`cleanup_orphans`](crate::cleanup_orphans) identify
 /// files left behind by crashed processes.
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
 /// use mod_tempdir::NamedTempFile;
-/// use std::io::Write;
 ///
-/// let f = NamedTempFile::new().unwrap();
-/// let mut handle = std::fs::OpenOptions::new()
-///     .write(true)
-///     .open(f.path())
-///     .unwrap();
-/// handle.write_all(b"hello").unwrap();
-/// drop(handle);
+/// let f = NamedTempFile::new()?;
+/// std::fs::write(f.path(), b"hello")?;
 /// // `f` is deleted automatically when it goes out of scope.
+/// # Ok::<(), std::io::Error>(())
 /// ```
 ///
 /// # Cleanup semantics
@@ -76,35 +72,75 @@ impl NamedTempFile {
     /// the current process ID (used by
     /// [`cleanup_orphans`](crate::cleanup_orphans) to identify
     /// entries left behind by crashed processes) and `{name12}` is a
-    /// 12-character Crockford base32 string from the shared name
-    /// generator. The file is materialized via
-    /// [`std::fs::File::create`]; the returned `File` handle is
-    /// closed before this function returns, so the caller starts
-    /// from a clean slate.
+    /// 12-character Crockford base32 string drawn from the OS random
+    /// source.
     ///
-    /// With the `mod-rand` feature enabled, the name fragment comes
-    /// from `mod_rand::tier2::unique_name`. Without it, from the
-    /// same internal process-unique mixer as
-    /// [`TempDir::new`](crate::TempDir::new).
+    /// The file is created empty and exclusively
+    /// ([`OpenOptions::create_new`](std::fs::OpenOptions::create_new)),
+    /// with mode `0600` on Unix. Nothing that already exists at the
+    /// chosen path is opened or truncated; if the path is taken, a
+    /// fresh name is drawn. The handle is closed before this function
+    /// returns, so the caller starts from a clean slate.
     ///
     /// # Errors
     ///
-    /// Returns the underlying [`io::Error`] from
-    /// [`std::fs::File::create`] if the file cannot be created.
+    /// Returns the underlying [`io::Error`] if the file cannot be
+    /// created, or [`io::ErrorKind::AlreadyExists`] if 64 fresh names
+    /// in a row were all taken.
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```
     /// use mod_tempdir::NamedTempFile;
     ///
-    /// let f = NamedTempFile::new().unwrap();
+    /// let f = NamedTempFile::new()?;
     /// assert!(f.path().is_file());
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn new() -> io::Result<Self> {
-        let name = unique_name(12);
+        Self::new_in(std::env::temp_dir())
+    }
+
+    /// Create a new temporary file inside `dir`.
+    ///
+    /// Same naming, permissions and cleanup as
+    /// [`NamedTempFile::new`], but under a parent directory of your
+    /// choice, which must already exist. Create the file next to the
+    /// final destination when you plan to call
+    /// [`persist_atomic`](Self::persist_atomic): `rename` is atomic
+    /// only within one filesystem.
+    /// [`cleanup_orphans`](crate::cleanup_orphans) only sweeps the OS
+    /// temp location, so files left behind under other parents are
+    /// not swept.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`io::Error`] if the file cannot be
+    /// created (for example, `dir` does not exist), or
+    /// [`io::ErrorKind::AlreadyExists`] if 64 fresh names in a row were
+    /// all taken.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_tempdir::{NamedTempFile, TempDir};
+    ///
+    /// let target_dir = TempDir::new()?;
+    /// let target = target_dir.path().join("config.toml");
+    ///
+    /// let tmp = NamedTempFile::new_in(target_dir.path())?;
+    /// std::fs::write(tmp.path(), b"key = 1")?;
+    /// tmp.persist_atomic(&target)?;
+    /// assert_eq!(std::fs::read(&target)?, b"key = 1");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn new_in(dir: impl AsRef<Path>) -> io::Result<Self> {
         let pid = std::process::id();
-        let path = std::env::temp_dir().join(format!(".tmpfile-{pid}-{name}"));
-        std::fs::File::create(&path)?;
+        let path = create_unique(
+            dir.as_ref(),
+            |name| format!(".tmpfile-{pid}-{name}"),
+            create_private_file,
+        )?;
         Ok(Self {
             path,
             cleanup_on_drop: true,
@@ -113,32 +149,63 @@ impl NamedTempFile {
 
     /// Create a new temporary file with the given prefix.
     ///
-    /// The final basename is `{prefix}-{12-char-name}`. The prefix
-    /// is joined verbatim and is the caller's responsibility to
-    /// sanitize.
+    /// The final basename is `{prefix}-{12-char-name}`, created in the
+    /// system's temp location with the same exclusive creation and
+    /// permissions as [`NamedTempFile::new`].
     ///
     /// # Errors
     ///
-    /// Returns the underlying [`io::Error`] from
-    /// [`std::fs::File::create`] if the file cannot be created.
+    /// Returns [`io::ErrorKind::InvalidInput`] if `prefix` contains a
+    /// path separator (`/` or `\`), `..`, a NUL byte, or (on Windows) a
+    /// `:`. Otherwise returns the same errors as
+    /// [`NamedTempFile::new`].
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```
     /// use mod_tempdir::NamedTempFile;
     ///
-    /// let f = NamedTempFile::with_prefix("my-fixture").unwrap();
+    /// let f = NamedTempFile::with_prefix("my-fixture")?;
     /// assert!(f
     ///     .path()
     ///     .file_name()
     ///     .unwrap()
     ///     .to_string_lossy()
     ///     .starts_with("my-fixture-"));
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn with_prefix(prefix: &str) -> io::Result<Self> {
-        let name = unique_name(12);
-        let path = std::env::temp_dir().join(format!("{prefix}-{name}"));
-        std::fs::File::create(&path)?;
+        Self::with_prefix_in(std::env::temp_dir(), prefix)
+    }
+
+    /// Create a new temporary file with the given prefix inside `dir`.
+    ///
+    /// Combines [`NamedTempFile::new_in`] and
+    /// [`NamedTempFile::with_prefix`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] for a prefix that
+    /// [`NamedTempFile::with_prefix`] rejects. Otherwise returns the
+    /// same errors as [`NamedTempFile::new_in`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mod_tempdir::{NamedTempFile, TempDir};
+    ///
+    /// let dir = TempDir::new()?;
+    /// let f = NamedTempFile::with_prefix_in(dir.path(), "upload")?;
+    /// assert_eq!(f.path().parent(), Some(dir.path()));
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn with_prefix_in(dir: impl AsRef<Path>, prefix: &str) -> io::Result<Self> {
+        validate_prefix(prefix)?;
+        let path = create_unique(
+            dir.as_ref(),
+            |name| format!("{prefix}-{name}"),
+            create_private_file,
+        )?;
         Ok(Self {
             path,
             cleanup_on_drop: true,
@@ -239,11 +306,11 @@ impl NamedTempFile {
     /// # Cross-filesystem behaviour
     ///
     /// `rename` is atomic only within a single filesystem. If
-    /// `target` is on a different mount than the temp directory,
+    /// `target` is on a different mount than the temp file,
     /// `rename` will return `EXDEV` on Unix or the equivalent on
-    /// Windows. Callers wanting cross-filesystem persistence must
-    /// either pick a `target` on the same filesystem as
-    /// [`std::env::temp_dir`] or do their own copy-and-delete.
+    /// Windows. Create the temp file next to the target with
+    /// [`NamedTempFile::new_in`] (for example, in `target`'s parent
+    /// directory) so both are on the same filesystem.
     ///
     /// # Example
     ///
@@ -379,6 +446,19 @@ impl From<PersistAtomicError> for io::Error {
     fn from(e: PersistAtomicError) -> Self {
         e.error
     }
+}
+
+/// Create one file exclusively, owner-only on Unix. Never opens,
+/// truncates or follows an entry that already exists at `path`.
+fn create_private_file(path: &Path) -> io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path).map(drop)
 }
 
 /// Best-effort fsync of a directory. Used by

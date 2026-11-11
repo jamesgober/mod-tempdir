@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-    Auto-cleanup on Drop. Collision-resistant naming. Cross-platform paths.<br>
+    Auto-cleanup on Drop. Exclusive creation, private permissions, OS-random names.<br>
     Zero runtime deps in the default build. <code>tempfile</code> replacement at MSRV 1.75.
 </p>
 
@@ -42,10 +42,10 @@ older MSRV, that single dependency forces the rest of your build to
 follow.
 
 `mod-tempdir` provides the same core capability at MSRV 1.75. The
-default build has zero runtime dependencies outside `std`. An opt-in
-feature delegates name generation to `mod-rand::tier2` when you want
-uniformly distributed names from a separately maintained generator;
-the public API is identical either way.
+default build has zero runtime dependencies outside `std`. Names come
+from the operating system's random source in every build; an opt-in
+feature routes that through `mod-rand::tier3` instead of `std`. The
+public API is identical either way.
 
 If a process crashes before `Drop` can run, the orphaned temp
 entries are not lost forever: `cleanup_orphans` (see the
@@ -63,7 +63,6 @@ mod-tempdir = "1"
 
 ```rust
 use mod_tempdir::{NamedTempFile, TempDir};
-use std::io::Write;
 
 // A temporary directory:
 let dir = TempDir::new()?;
@@ -73,8 +72,7 @@ std::fs::write(&file_path, b"hello")?;
 
 // A standalone temporary file:
 let f = NamedTempFile::new()?;
-let mut h = std::fs::OpenOptions::new().write(true).open(f.path())?;
-h.write_all(b"hello")?;
+std::fs::write(f.path(), b"hello")?;
 // `f` is deleted at end of scope.
 # Ok::<(), std::io::Error>(())
 ```
@@ -83,13 +81,17 @@ h.write_all(b"hello")?;
 
 ```rust
 TempDir::new()                  // -> io::Result<TempDir>
+TempDir::new_in(dir)            // -> io::Result<TempDir> under `dir`
 TempDir::with_prefix("test")    // -> io::Result<TempDir> with custom prefix
+TempDir::with_prefix_in(dir, "test")
 dir.path()                       // -> &Path
 dir.persist()                    // -> PathBuf (disables cleanup)
 dir.cleanup_on_drop()            // -> bool
 
 NamedTempFile::new()             // -> io::Result<NamedTempFile>
+NamedTempFile::new_in(dir)       // -> io::Result<NamedTempFile> under `dir`
 NamedTempFile::with_prefix("x")  // -> io::Result<NamedTempFile> with custom prefix
+NamedTempFile::with_prefix_in(dir, "x")
 file.path()                      // -> &Path
 file.persist()                   // -> PathBuf (disables cleanup)
 file.persist_atomic(target)      // -> Result<PathBuf, PersistAtomicError> (atomic durable move, source preserved on failure)
@@ -103,7 +105,8 @@ Both types share the same `with_prefix` / `path` / `persist` /
 same silent best-effort Drop semantics. The `TempDir` signature
 surface has not changed since `0.1.0`. `NamedTempFile` and
 `cleanup_orphans` joined the public surface in `0.9.2`;
-`NamedTempFile::persist_atomic` in `0.9.3`. As of `1.0.0` the
+`NamedTempFile::persist_atomic` in `0.9.3`; `new_in` and
+`with_prefix_in` on both types in `1.1.0`. As of `1.0.0` the
 entire public API is pinned: breaking changes require a major
 bump.
 
@@ -119,47 +122,47 @@ runs can be identified later:
 | `TempDir`       | `.tmp-{pid}-{12-char-name}`          |
 | `NamedTempFile` | `.tmpfile-{pid}-{12-char-name}`      |
 
-Caller-supplied prefixes via `with_prefix` are joined verbatim
-(without the PID segment) and override the default. The user's
-namespace is the user's responsibility to clean up.
+Caller-supplied prefixes via `with_prefix` replace the default
+(without the PID segment). A prefix must be a plain name: one
+containing `/`, `\`, `..`, a NUL byte, or (on Windows) `:` is
+rejected with `io::ErrorKind::InvalidInput`. The user's namespace is
+the user's responsibility to clean up.
 
 ## Feature flags
 
 | Flag       | Default | Effect |
 |------------|---------|--------|
-| `mod-rand` | off     | Use `mod_rand::tier2::unique_name` for naming. Adds one optional dependency (`mod-rand`, itself free of further deps). Applies to both `TempDir` and `NamedTempFile`. |
+| `mod-rand` | off     | Draw names from `mod_rand::tier3` (the OS random source) on every call. Adds one optional dependency (`mod-rand`, itself free of further deps). Applies to both `TempDir` and `NamedTempFile`. |
 
-Default naming uses an internal mixer over the process ID, the
-nanosecond clock, and a per-process atomic counter. It is fast,
-collision-free within a process, and good enough for test fixtures.
-
-The `mod-rand` feature swaps that mixer for `mod_rand::tier2`, a
-SplitMix + Stafford-finisher pipeline that produces a uniform
-distribution across the alphabet without changing how names look
-on disk. Enable when you want the stronger statistical properties
-of a tested generator. Both paths use the same Crockford base32
-alphabet (`0-9A-Z` minus `I`, `L`, `O`, `U`), so a caller that
-inspects directory basenames keeps working when the feature is
-toggled.
+Both paths draw names from the operating system's random source. The
+default build reads it through `std`: `RandomState` keys come from
+the OS random source, and each name is a keyed hash under such a key.
+The `mod-rand` feature reads fresh OS random bytes for every name
+instead, falling back to the `std` path if that read fails. Both
+paths use the same Crockford base32 alphabet (`0-9A-Z` minus `I`,
+`L`, `O`, `U`), so a caller that inspects basenames keeps working
+when the feature is toggled.
 
 ```toml
 [dependencies]
 mod-tempdir = { version = "1", features = ["mod-rand"] }
 ```
 
-## How it picks unique names
+## How entries are created
 
-By default, the name is derived from:
-
-- Process ID (`PID`)
-- Current nanosecond timestamp
-- An atomic counter that guarantees uniqueness within a process
-
-This is collision-resistant enough for test fixtures and concurrent
-local work. It is **not** cryptographically secure. If you need
-crypto-quality random names (for example, for security-sensitive
-temp paths), generate one with `mod_rand::tier3` and pass it to
-`TempDir::with_prefix`.
+- **Unpredictable names.** The 12-character fragment carries 60 bits
+  from the OS random source, in every build.
+- **Exclusive creation.** Files are created with
+  `OpenOptions::create_new` and directories with `DirBuilder`, so
+  nothing that already exists at the chosen path is opened, truncated
+  or followed. A taken path gets a fresh name (up to 64 attempts).
+- **Private permissions.** On Unix, files are `0600` and directories
+  `0700`. On Windows, new entries inherit the ACL of their parent;
+  the default `%TEMP%` is inside the user's profile, which only that
+  user, `SYSTEM` and administrators can open. The crate does not set
+  Windows ACLs itself, so an entry made with `new_in` in a shared
+  directory is as private as that directory.
+- **Prefixes stay inside the parent.** See "Default basenames" above.
 
 ## Cleaning up after crashes
 
@@ -207,13 +210,9 @@ the new contents survive a crash, never a half-written file:
 
 ```rust
 use mod_tempdir::NamedTempFile;
-use std::io::Write;
 
 let f = NamedTempFile::new()?;
-{
-    let mut h = std::fs::OpenOptions::new().write(true).open(f.path())?;
-    h.write_all(b"finalized payload")?;
-}
+std::fs::write(f.path(), b"finalized payload")?;
 match f.persist_atomic("config.toml") {
     Ok(landed) => {
         // `landed` is the target path; cleanup-on-drop is disabled.
@@ -235,16 +234,24 @@ doesn't lose the source. This matches the data-integrity guarantee
 of the `tempfile` crate's persist API.
 
 `rename` is atomic only within a single filesystem. If `target` is
-on a different mount than `std::env::temp_dir()`, `persist_atomic`
-returns `EXDEV` (Unix) or the Windows equivalent inside the
-`PersistAtomicError`. For cross-filesystem finalization, copy
-through the target filesystem first using `TempDir::with_prefix`
-rooted at the target's parent.
+on a different mount than the temp file, `persist_atomic` returns
+`EXDEV` (Unix) or the Windows equivalent inside the
+`PersistAtomicError`. Create the temp file next to the target with
+`NamedTempFile::new_in(target_dir)` so both share a filesystem:
+
+```rust
+use mod_tempdir::NamedTempFile;
+
+let tmp = NamedTempFile::new_in("/var/lib/app")?;
+std::fs::write(tmp.path(), b"new contents")?;
+tmp.persist_atomic("/var/lib/app/config.toml")?;
+# Ok::<(), std::io::Error>(())
+```
 
 ## Concurrency
 
-Every public constructor (`TempDir::new`, `TempDir::with_prefix`,
-`NamedTempFile::new`, `NamedTempFile::with_prefix`) is safe to call
+Every public constructor (`new`, `new_in`, `with_prefix`,
+`with_prefix_in` on both `TempDir` and `NamedTempFile`) is safe to call
 from many threads at once. The verification suite includes paired
 stress tests that fire 256 threads through a shared barrier for each
 type and assert every returned path is distinct. Both stress tests
@@ -274,6 +281,9 @@ auto-cleanup temp dirs without pulling in `tempfile`'s dep tree.
   breaking changes require a major-version bump per SemVer.
   Additive surface goes to a minor version; bug fixes and doc
   improvements to a patch.
+- `v1.1.0` creates entries exclusively with private permissions,
+  draws names from the OS random source in every build, rejects
+  path separators in prefixes, and adds `new_in` / `with_prefix_in`.
 
 A very early plan for `v0.9.1` proposed routing directory operations
 through `fsys`; that idea was retired during the `0.9.x` line because

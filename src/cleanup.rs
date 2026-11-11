@@ -63,7 +63,7 @@ pub fn cleanup_orphans(max_age_hours: u64) -> io::Result<usize> {
 
     let mut removed = 0_usize;
 
-    for entry_result in std::fs::read_dir(&temp_dir)? {
+    for entry_result in std::fs::read_dir(temp_dir)? {
         let entry = match entry_result {
             Ok(e) => e,
             Err(_) => continue,

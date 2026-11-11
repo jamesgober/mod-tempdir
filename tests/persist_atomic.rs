@@ -91,7 +91,7 @@ fn errors_when_target_parent_missing_and_preserves_source() {
         .join("file.bin");
 
     let err = f
-        .persist_atomic(&target)
+        .persist_atomic(target)
         .expect_err("persist_atomic should error when target parent missing");
 
     // The data-integrity contract: on failure, the temp file is
