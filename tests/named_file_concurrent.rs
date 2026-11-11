@@ -2,7 +2,7 @@
 // and must each receive a unique path. Mirrors
 // `tests/concurrent_create.rs` (which covers TempDir). Runs on both
 // feature configurations so the collision guarantee is verified for
-// both the placeholder generator and the `mod_rand::tier2` generator.
+// both the default `std` name path and the `mod_rand::tier3` path.
 
 use std::collections::HashSet;
 use std::path::PathBuf;

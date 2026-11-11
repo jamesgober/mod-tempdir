@@ -5,10 +5,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mod_tempdir::{__unique_name_for_tests, NamedTempFile, TempDir};
+use mod_tempdir::{NamedTempFile, TempDir};
+
+// Kept apart from the line above so every rustfmt version agrees on
+// the import order.
+use mod_tempdir::__unique_name_for_tests;
 
 /// Crockford base32 alphabet: `0-9A-Z` minus `I, L, O, U`. Both the
-/// crate's built-in placeholder and `mod_rand::tier2::unique_name`
+/// crate's default `std` path and `mod_rand::tier3::random_base32`
 /// emit names from this exact set.
 const ALPHABET: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
