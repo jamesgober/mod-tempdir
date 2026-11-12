@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-12
+
+### Security
+
+- `NamedTempFile` keeps the handle from its exclusive create for its
+  whole lifetime. Before, the handle was closed at creation, so later
+  writes, the fsync in `persist_atomic` and the rename acted on
+  whatever was at the path by then; in a directory others can write,
+  the entry could be swapped for a link or another file.
+  `persist_atomic` now syncs through the held handle and checks that
+  the path still names that file (device and inode on Unix, volume
+  serial number and file index on Windows, without following a final
+  link) before renaming; a mismatch fails with `io::ErrorKind::Other`
+  and nothing is renamed. A short window remains between the check
+  and the rename, which still goes by name.
+
+### Fixed
+
+- `cleanup_orphans` no longer removes live entries on Windows and
+  macOS. Entries with the calling process's PID are never removed;
+  other PIDs are checked with `kill(pid, 0)` on Unix other than Linux
+  and `OpenProcess` plus `GetExitCodeProcess` on Windows (Linux keeps
+  `/proc/{pid}`); an unclear answer counts as alive. A directory's age
+  is now the newest mtime of the directory and its direct children.
+- `persist_atomic` to a bare file name now syncs the current
+  directory after the rename instead of skipping it silently.
+- The crate's tests sweep a private directory instead of the shared
+  OS temp directory.
+- README: entries are removed when a panic unwinds; they are left
+  behind only when `Drop` never runs.
+
+### Added
+
+- `NamedTempFile::as_file`, `NamedTempFile::as_file_mut` and
+  `NamedTempFile::reopen` (which checks that the reopened path is the
+  same file).
+- `Read`, `Write` and `Seek` for `NamedTempFile`, through its handle.
+- `cleanup_orphans_in(dir, max_age_hours)`: the same sweep for a
+  directory of your choice.
+
+### Compatibility
+
+- No signature changes. A `NamedTempFile` now holds one open handle;
+  on Windows it allows other opens, renames and deletes, so path
+  access, `Drop` and `persist_atomic` behave as before.
+- `persist_atomic` fails if the file at the path was removed and
+  replaced, including by the caller's own code.
+- `cleanup_orphans` removes fewer entries on Windows and macOS, and
+  none on platforms with no process query.
+- A few `unsafe` FFI calls into libraries `std` already links; no new
+  dependency. MSRV stays at Rust `1.75`.
+
 ## [1.1.0] - 2026-11-11
 
 ### Security
@@ -334,7 +386,8 @@ This is the name-claim release. Real implementations land in `0.9.x`:
   (shipped in `0.9.2`)
 - Windows file-lock retry logic
 
-[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/jamesgober/mod-tempdir/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/jamesgober/mod-tempdir/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/jamesgober/mod-tempdir/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jamesgober/mod-tempdir/compare/v0.9.3...v1.0.0

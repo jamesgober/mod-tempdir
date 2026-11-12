@@ -1,31 +1,47 @@
-//! Orphan-entry cleanup. See [`cleanup_orphans`].
+//! Orphan-entry cleanup. See [`cleanup_orphans`] and
+//! [`cleanup_orphans_in`].
 //!
 //! Companion module to [`crate::TempDir`] and [`crate::NamedTempFile`].
-//! Provides a single free function that scans the OS temp dir for
-//! default-prefix entries this crate could have created and removes
-//! those whose owning processes are no longer alive.
+//! Scans a directory for default-prefix entries this crate could have
+//! created and removes those whose owning processes are no longer
+//! alive.
 
 use std::io;
+use std::path::Path;
 use std::time::{Duration, SystemTime};
+
+use crate::sys::pid_alive;
 
 /// Sweep the OS temp directory for default-prefix entries this crate
 /// could have created and remove those that look orphaned.
+///
+/// Same as [`cleanup_orphans_in`] with the directory returned by
+/// [`std::env::temp_dir`].
 ///
 /// An entry is removed when **both** of these hold:
 ///
 /// 1. **The owning process is not alive.** Each default-prefix entry
 ///    carries the originating process's PID in its basename
 ///    (`.tmp-{pid}-{name}` for [`crate::TempDir`],
-///    `.tmpfile-{pid}-{name}` for [`crate::NamedTempFile`]). On Linux
-///    liveness is checked via the presence of `/proc/{pid}`. On
-///    macOS and Windows the liveness check is treated as "process is
-///    dead" (since cross-platform process introspection without
-///    platform deps is not available); the age check carries the
-///    safety burden alone on those platforms.
-/// 2. **The entry's mtime is at least `max_age_hours` old.** This is
-///    the load-bearing safety guard on macOS and Windows: pick a
-///    threshold larger than any process you expect to legitimately
-///    hold temp paths.
+///    `.tmpfile-{pid}-{name}` for [`crate::NamedTempFile`]). Entries
+///    carrying the calling process's own PID are never removed. Other
+///    PIDs are checked with the platform's own process table:
+///    `/proc/{pid}` on Linux, `kill(pid, 0)` on other Unix systems,
+///    and `OpenProcess` plus `GetExitCodeProcess` on Windows. When the
+///    platform cannot answer clearly (for example the process belongs
+///    to another user and the query is denied), the process counts as
+///    alive and its entries are kept. On platforms with no process
+///    query at all, nothing is removed.
+/// 2. **The entry is at least `max_age_hours` old.** For a file the
+///    age comes from its mtime. For a directory it comes from the
+///    newest mtime of the directory and its direct children, so a
+///    working directory whose files are still being written is not
+///    treated as old.
+///
+/// PIDs are reused by the operating system, so an orphan whose PID now
+/// belongs to an unrelated live process is kept until that process
+/// exits. That is the safe direction: a live entry is never removed
+/// because of a PID check.
 ///
 /// Entries that do not match the crate's default prefix patterns,
 /// including any caller-supplied `with_prefix(...)` paths, are never
@@ -57,13 +73,44 @@ use std::time::{Duration, SystemTime};
 /// eprintln!("cleanup_orphans removed {removed} orphaned entries");
 /// ```
 pub fn cleanup_orphans(max_age_hours: u64) -> io::Result<usize> {
-    let temp_dir = std::env::temp_dir();
+    cleanup_orphans_in(std::env::temp_dir(), max_age_hours)
+}
+
+/// Sweep `dir` for default-prefix entries this crate could have
+/// created and remove those that look orphaned.
+///
+/// Use this for entries created with [`crate::TempDir::new_in`] or
+/// [`crate::NamedTempFile::new_in`], which [`cleanup_orphans`] does
+/// not see, and in tests, so a sweep never touches the shared OS temp
+/// directory. The rules for what is removed are the same as for
+/// [`cleanup_orphans`]. Only direct children of `dir` are examined.
+///
+/// # Errors
+///
+/// Returns the underlying [`io::Error`] only if reading `dir` itself
+/// fails. Per-entry failures are silent and not counted.
+///
+/// # Returns
+///
+/// The number of entries successfully removed.
+///
+/// # Example
+///
+/// ```
+/// use mod_tempdir::{cleanup_orphans_in, TempDir};
+///
+/// let scratch = TempDir::new()?;
+/// // Nothing in a fresh directory is an orphan.
+/// assert_eq!(cleanup_orphans_in(scratch.path(), 24)?, 0);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn cleanup_orphans_in(dir: impl AsRef<Path>, max_age_hours: u64) -> io::Result<usize> {
     let max_age = Duration::from_secs(max_age_hours.saturating_mul(3600));
     let now = SystemTime::now();
 
     let mut removed = 0_usize;
 
-    for entry_result in std::fs::read_dir(temp_dir)? {
+    for entry_result in std::fs::read_dir(dir.as_ref())? {
         let entry = match entry_result {
             Ok(e) => e,
             Err(_) => continue,
@@ -111,15 +158,21 @@ fn try_remove_one(entry: &std::fs::DirEntry, now: SystemTime, max_age: Duration)
         return false;
     }
 
-    let metadata = match entry.metadata() {
+    let path = entry.path();
+    // `symlink_metadata` so a link planted under a default name is
+    // judged (and removed) as the link itself.
+    let metadata = match std::fs::symlink_metadata(&path) {
         Ok(m) => m,
         Err(_) => return false,
     };
-    let mtime = match metadata.modified() {
+    let mut newest = match metadata.modified() {
         Ok(t) => t,
         Err(_) => return false,
     };
-    let age = match now.duration_since(mtime) {
+    if is_dir_pattern && metadata.is_dir() {
+        newest = newest_child_mtime(&path, newest);
+    }
+    let age = match now.duration_since(newest) {
         Ok(d) => d,
         Err(_) => return false,
     };
@@ -127,7 +180,6 @@ fn try_remove_one(entry: &std::fs::DirEntry, now: SystemTime, max_age: Duration)
         return false;
     }
 
-    let path = entry.path();
     let result = if is_dir_pattern {
         std::fs::remove_dir_all(&path)
     } else {
@@ -136,24 +188,20 @@ fn try_remove_one(entry: &std::fs::DirEntry, now: SystemTime, max_age: Duration)
     result.is_ok()
 }
 
-/// Returns `true` if process `pid` is alive on this host.
-///
-/// Linux: checks `/proc/{pid}` for existence.
-///
-/// macOS, Windows: returns `false` unconditionally. Cross-platform
-/// process introspection without `libc` / `windows-sys` is not
-/// available; the age check is the sole safety gate on those
-/// platforms. Returning `false` here lets the AND condition in
-/// [`cleanup_orphans`] degrade to age-only.
-#[cfg(target_os = "linux")]
-fn pid_alive(pid: u32) -> bool {
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn pid_alive(_pid: u32) -> bool {
-    // Cross-platform process introspection without deps is not
-    // available; see [`cleanup_orphans`] rustdoc. Returning false
-    // lets the AND condition degrade to age-only on this platform.
-    false
+/// Newest mtime among `dir`'s direct children, or `start` if none is
+/// newer (or the directory cannot be read).
+fn newest_child_mtime(dir: &Path, start: SystemTime) -> SystemTime {
+    let mut newest = start;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return newest,
+    };
+    for entry in entries.flatten() {
+        if let Ok(t) = entry.metadata().and_then(|m| m.modified()) {
+            if t > newest {
+                newest = t;
+            }
+        }
+    }
+    newest
 }

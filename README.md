@@ -70,9 +70,11 @@ let file_path = dir.path().join("test.txt");
 std::fs::write(&file_path, b"hello")?;
 // `dir` and its contents are deleted at end of scope.
 
-// A standalone temporary file:
-let f = NamedTempFile::new()?;
-std::fs::write(f.path(), b"hello")?;
+// A standalone temporary file, written through the handle it was
+// created with:
+use std::io::Write;
+let mut f = NamedTempFile::new()?;
+f.write_all(b"hello")?;
 // `f` is deleted at end of scope.
 # Ok::<(), std::io::Error>(())
 ```
@@ -93,12 +95,19 @@ NamedTempFile::new_in(dir)       // -> io::Result<NamedTempFile> under `dir`
 NamedTempFile::with_prefix("x")  // -> io::Result<NamedTempFile> with custom prefix
 NamedTempFile::with_prefix_in(dir, "x")
 file.path()                      // -> &Path
+file.as_file()                   // -> &File (the handle from the exclusive create)
+file.as_file_mut()               // -> &mut File
+file.reopen()                    // -> io::Result<File> (checked to be the same file)
 file.persist()                   // -> PathBuf (disables cleanup)
 file.persist_atomic(target)      // -> Result<PathBuf, PersistAtomicError> (atomic durable move, source preserved on failure)
 file.cleanup_on_drop()           // -> bool
 
 cleanup_orphans(max_age_hours)   // -> io::Result<usize> (removed count)
+cleanup_orphans_in(dir, max_age_hours) // -> io::Result<usize>, sweeps `dir`
 ```
+
+`NamedTempFile` also implements `Read`, `Write` and `Seek` through its
+handle.
 
 Both types share the same `with_prefix` / `path` / `persist` /
 `cleanup_on_drop` shape, the same name-generation pipeline, and the
@@ -106,7 +115,8 @@ same silent best-effort Drop semantics. The `TempDir` signature
 surface has not changed since `0.1.0`. `NamedTempFile` and
 `cleanup_orphans` joined the public surface in `0.9.2`;
 `NamedTempFile::persist_atomic` in `0.9.3`; `new_in` and
-`with_prefix_in` on both types in `1.1.0`. As of `1.0.0` the
+`with_prefix_in` on both types in `1.1.0`; the `NamedTempFile` handle
+accessors and `cleanup_orphans_in` in `1.2.0`. As of `1.0.0` the
 entire public API is pinned: breaking changes require a major
 bump.
 
@@ -163,14 +173,27 @@ mod-tempdir = { version = "1", features = ["mod-rand"] }
   Windows ACLs itself, so an entry made with `new_in` in a shared
   directory is as private as that directory.
 - **Prefixes stay inside the parent.** See "Default basenames" above.
+- **Use after creation goes through the handle.** `NamedTempFile`
+  keeps the handle from the exclusive create. Writes through it
+  (`as_file`, `as_file_mut`, the `Write` impl) always reach the file
+  that was created. `persist_atomic` syncs through it and refuses to
+  rename if the path no longer names that file, and `reopen` makes
+  the same check. Opening `path()` by name is safe only in a
+  directory that no other user or service can write, such as the
+  default per-user `%TEMP%` or a sticky `/tmp`: anyone who can write
+  to the parent can swap the entry for a link or another file after
+  it is created.
 
 ## Cleaning up after crashes
 
-If a process panics, gets SIGKILL'd, or otherwise exits without
-running `Drop`, its temp entries are left behind. `cleanup_orphans`
-sweeps the OS temp directory for default-prefix entries from this
-crate and removes the ones whose owning processes are no longer
-alive:
+With the default `panic = "unwind"`, `Drop` runs while a panic
+unwinds, so entries are removed. They are left behind when `Drop`
+never runs: a build with `panic = "abort"`, `std::process::exit`, a
+kill signal or a crash, or a value that was leaked or still held
+elsewhere. `cleanup_orphans` sweeps the OS temp directory for
+default-prefix entries from this crate and removes the ones whose
+owning processes are no longer alive (`cleanup_orphans_in(dir, ..)`
+does the same for a directory you choose):
 
 ```rust
 use mod_tempdir::cleanup_orphans;
@@ -183,13 +206,20 @@ eprintln!("cleanup_orphans removed {removed} orphan(s)");
 Removal requires **both** conditions: the originating PID is no
 longer alive, and the entry is at least `max_age_hours` old.
 
-PID liveness is checked via `/proc/{pid}` on Linux. On macOS and
-Windows, cross-platform process introspection requires platform
-crates this library does not pull in, so the liveness check is
-treated as "dead" there. On those platforms the age threshold is
-the only safety guard: pick `max_age_hours` larger than any
-legitimate process lifetime, or call `cleanup_orphans` only at
-known-safe moments (typically program startup).
+Entries carrying the calling process's own PID are never removed.
+Other PIDs are checked with the platform's process table:
+`/proc/{pid}` on Linux, `kill(pid, 0)` on other Unix systems, and
+`OpenProcess` with `GetExitCodeProcess` on Windows, all through
+functions `std` already links, so no dependency is added. When the
+answer is unclear (for example, another user's process that cannot be
+queried), the process counts as alive and its entries stay. A
+directory's age is the newest mtime of the directory and its direct
+children, so a working directory whose files are still being written
+is not old. PIDs are reused, so an orphan whose PID now belongs to an
+unrelated process waits until that process exits. On Linux, PID
+namespaces that share a `/tmp` see different PIDs, so a container can
+misjudge entries of another container; give each its own temp
+directory.
 
 Caller-supplied `with_prefix` paths and legacy entries from earlier
 versions (without a PID segment in the basename) are never touched.
@@ -202,17 +232,22 @@ counterpart to `persist`. It performs the canonical "atomic durable
 write" sequence so that either the previous version of `target` or
 the new contents survive a crash, never a half-written file:
 
-1. `fsync` the temp file to push its contents to disk.
-2. Atomic `std::fs::rename` onto `target` (`rename(2)` on Unix,
+1. `fsync` the temp file through the handle held since creation.
+2. Check that the temp path still names that file; if it was swapped,
+   fail without renaming. The rename itself still goes by name, so a
+   short window remains in a directory others can write.
+3. Atomic `std::fs::rename` onto `target` (`rename(2)` on Unix,
    `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING` on Windows).
-3. Best-effort `fsync` of the target's parent directory so the
-   rename itself survives a crash.
+4. Best-effort `fsync` of the target's parent directory so the
+   rename itself survives a crash (the current directory for a bare
+   file name).
 
 ```rust
 use mod_tempdir::NamedTempFile;
+use std::io::Write;
 
-let f = NamedTempFile::new()?;
-std::fs::write(f.path(), b"finalized payload")?;
+let mut f = NamedTempFile::new()?;
+f.write_all(b"finalized payload")?;
 match f.persist_atomic("config.toml") {
     Ok(landed) => {
         // `landed` is the target path; cleanup-on-drop is disabled.
@@ -241,9 +276,10 @@ on a different mount than the temp file, `persist_atomic` returns
 
 ```rust
 use mod_tempdir::NamedTempFile;
+use std::io::Write;
 
-let tmp = NamedTempFile::new_in("/var/lib/app")?;
-std::fs::write(tmp.path(), b"new contents")?;
+let mut tmp = NamedTempFile::new_in("/var/lib/app")?;
+tmp.write_all(b"new contents")?;
 tmp.persist_atomic("/var/lib/app/config.toml")?;
 # Ok::<(), std::io::Error>(())
 ```
@@ -284,6 +320,10 @@ auto-cleanup temp dirs without pulling in `tempfile`'s dep tree.
 - `v1.1.0` creates entries exclusively with private permissions,
   draws names from the OS random source in every build, rejects
   path separators in prefixes, and adds `new_in` / `with_prefix_in`.
+- `v1.2.0` keeps the `NamedTempFile` handle and checks the path
+  before `persist_atomic` renames, adds `as_file`, `as_file_mut`,
+  `reopen` and `cleanup_orphans_in`, and makes `cleanup_orphans` check
+  process liveness on every platform.
 
 A very early plan for `v0.9.1` proposed routing directory operations
 through `fsys`; that idea was retired during the `0.9.x` line because
