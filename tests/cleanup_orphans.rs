@@ -1,14 +1,12 @@
-// Integration tests for `cleanup_orphans`. Tests are isolated from
-// each other (and from other test binaries running in parallel) by
-// embedding a per-test bogus PID and a per-test "tag" character in
-// the orphan basenames, so each test only ever asserts on entries
-// it created.
+// Integration tests for `cleanup_orphans_in`. Every test sweeps its
+// own private `TempDir`, never the shared OS temp directory, so the
+// suite cannot remove entries that belong to other processes.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use mod_tempdir::cleanup_orphans;
+use mod_tempdir::{cleanup_orphans_in, NamedTempFile, TempDir};
 
 /// Build a basename in the crate's default directory pattern.
 /// `pid` is the PID encoded into the basename; `tag` distinguishes
@@ -69,8 +67,8 @@ fn purge_stale(path: &Path) {
 /// Create a fake orphan directory with a backdated mtime. If a
 /// previous failed run left an entry at the same path, it is purged
 /// first so this run starts from a known state.
-fn create_orphan_dir(pid: u32, tag: &str, age: Duration) -> PathBuf {
-    let path = std::env::temp_dir().join(fake_dir_basename(pid, tag));
+fn create_orphan_dir(root: &Path, pid: u32, tag: &str, age: Duration) -> PathBuf {
+    let path = root.join(fake_dir_basename(pid, tag));
     purge_stale(&path);
     std::fs::create_dir(&path).expect("create_dir failed for fake orphan dir");
     set_dir_modified(&path, SystemTime::now() - age);
@@ -79,8 +77,8 @@ fn create_orphan_dir(pid: u32, tag: &str, age: Duration) -> PathBuf {
 
 /// Create a fake orphan file with a backdated mtime. Same fresh-
 /// start guard as `create_orphan_dir`.
-fn create_orphan_file(pid: u32, tag: &str, age: Duration) -> PathBuf {
-    let path = std::env::temp_dir().join(fake_file_basename(pid, tag));
+fn create_orphan_file(root: &Path, pid: u32, tag: &str, age: Duration) -> PathBuf {
+    let path = root.join(fake_file_basename(pid, tag));
     purge_stale(&path);
     File::create(&path).expect("File::create failed for fake orphan file");
     set_file_modified(&path, SystemTime::now() - age);
@@ -104,14 +102,15 @@ fn removes_old_orphan_directory() {
     let tag = "ZRMVDIRAAAAA";
     let age = Duration::from_secs(10 * 3600); // 10 hours old
 
-    let path = create_orphan_dir(pid, tag, age);
+    let root = TempDir::new().unwrap();
+    let path = create_orphan_dir(root.path(), pid, tag, age);
     assert!(path.exists(), "fake orphan dir was not created");
 
-    let _ = cleanup_orphans(1).expect("cleanup_orphans failed");
+    let _ = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
 
     assert!(
         !path.exists(),
-        "10-hour-old orphan dir survived cleanup_orphans(1): {path:?}"
+        "10-hour-old orphan dir survived cleanup_orphans_in(1): {path:?}"
     );
     force_remove(&path);
 }
@@ -122,14 +121,15 @@ fn removes_old_orphan_file() {
     let tag = "ZRMVFILEAAAA";
     let age = Duration::from_secs(10 * 3600);
 
-    let path = create_orphan_file(pid, tag, age);
+    let root = TempDir::new().unwrap();
+    let path = create_orphan_file(root.path(), pid, tag, age);
     assert!(path.exists(), "fake orphan file was not created");
 
-    let _ = cleanup_orphans(1).expect("cleanup_orphans failed");
+    let _ = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
 
     assert!(
         !path.exists(),
-        "10-hour-old orphan file survived cleanup_orphans(1): {path:?}"
+        "10-hour-old orphan file survived cleanup_orphans_in(1): {path:?}"
     );
     force_remove(&path);
 }
@@ -140,10 +140,11 @@ fn keeps_recent_entry() {
     // threshold of 1 hour must protect it.
     let pid = u32::MAX - 2;
     let tag = "ZKPRECENTAAA";
-    let path = create_orphan_dir(pid, tag, Duration::from_secs(0));
+    let root = TempDir::new().unwrap();
+    let path = create_orphan_dir(root.path(), pid, tag, Duration::from_secs(0));
     assert!(path.exists());
 
-    let _ = cleanup_orphans(1).expect("cleanup_orphans failed");
+    let _ = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
 
     assert!(
         path.exists(),
@@ -158,12 +159,13 @@ fn ignores_custom_prefix_entries() {
     // outside our namespace; cleanup_orphans must not touch it,
     // regardless of age.
     let basename = "user-fixture-99999-ZKPCSTOMAAAA";
-    let path = std::env::temp_dir().join(basename);
+    let root = TempDir::new().unwrap();
+    let path = root.path().join(basename);
     purge_stale(&path);
     std::fs::create_dir(&path).expect("create_dir failed");
     set_dir_modified(&path, SystemTime::now() - Duration::from_secs(48 * 3600));
 
-    let _ = cleanup_orphans(1).expect("cleanup_orphans failed");
+    let _ = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
 
     assert!(path.exists(), "custom-prefix entry was removed: {path:?}");
     force_remove(&path);
@@ -174,35 +176,95 @@ fn ignores_legacy_format_entries() {
     // Legacy v0.9.0 / v0.9.1 entry: `.tmp-{name}` with NO PID
     // segment. Not eligible for cleanup; must be left alone.
     let basename = ".tmp-ZKPLEGACYAAAA"; // no `{pid}-` after the prefix
-    let path = std::env::temp_dir().join(basename);
+    let root = TempDir::new().unwrap();
+    let path = root.path().join(basename);
     purge_stale(&path);
     std::fs::create_dir(&path).expect("create_dir failed");
     set_dir_modified(&path, SystemTime::now() - Duration::from_secs(48 * 3600));
 
-    let _ = cleanup_orphans(1).expect("cleanup_orphans failed");
+    let _ = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
 
     assert!(path.exists(), "legacy-format entry was removed: {path:?}");
     force_remove(&path);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn keeps_entry_owned_by_live_process_on_linux() {
-    // On Linux the PID-liveness check uses /proc. Encode the
-    // current process's PID into the orphan basename; cleanup must
-    // refuse to remove it, even when it satisfies the age criterion.
+fn keeps_entries_owned_by_the_calling_process() {
+    // Regression: off Linux, `cleanup_orphans` treated every PID as
+    // dead and removed the caller's own live entries once they were
+    // older than the threshold.
     let pid = std::process::id();
-    let tag = "ZKPLIVEAAAAA";
     let age = Duration::from_secs(10 * 3600);
+    let root = TempDir::new().unwrap();
 
-    let path = create_orphan_dir(pid, tag, age);
-    assert!(path.exists());
+    let dir = create_orphan_dir(root.path(), pid, "ZKPOWNDIRAAA", age);
+    let file = create_orphan_file(root.path(), pid, "ZKPOWNFILEAA", age);
+    let live = TempDir::new_in(root.path()).unwrap();
+    set_dir_modified(live.path(), SystemTime::now() - age);
+    let live_file = NamedTempFile::new_in(root.path()).unwrap();
+    set_file_modified(live_file.path(), SystemTime::now() - age);
 
-    let _ = cleanup_orphans(1).expect("cleanup_orphans failed");
+    let removed = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
 
+    assert_eq!(removed, 0, "entries of the calling process were removed");
+    assert!(dir.exists());
+    assert!(file.exists());
+    assert!(live.path().exists());
+    assert!(live_file.path().exists());
+}
+
+/// Start a child process that stays alive until its stdin closes.
+fn spawn_idle_child() -> std::process::Child {
+    std::process::Command::new("sort")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn `sort` as an idle child process")
+}
+
+#[test]
+fn keeps_entries_of_a_live_process_and_removes_them_once_it_exits() {
+    let mut child = spawn_idle_child();
+    let pid = child.id();
+    let age = Duration::from_secs(10 * 3600);
+    let root = TempDir::new().unwrap();
+    let path = create_orphan_dir(root.path(), pid, "ZKPCHILDAAAA", age);
+
+    let removed = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
+    assert_eq!(removed, 0, "entry of a live process was removed");
     assert!(
         path.exists(),
-        "live-process entry was removed by cleanup_orphans on Linux: {path:?}"
+        "entry of a live process was removed: {path:?}"
     );
-    force_remove(&path);
+
+    drop(child.stdin.take());
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let removed = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
+    assert_eq!(removed, 1, "entry of an exited process was kept");
+    assert!(!path.exists());
+}
+
+#[test]
+fn keeps_a_directory_whose_children_are_recent() {
+    // A working directory's own mtime does not change when files in
+    // it are rewritten; the sweep must look at the children too.
+    let pid = u32::MAX - 3;
+    let root = TempDir::new().unwrap();
+    let path = create_orphan_dir(root.path(), pid, "ZKPCHILDMTIM", Duration::from_secs(0));
+    let inner = path.join("data.bin");
+    File::create(&inner).unwrap();
+    set_dir_modified(&path, SystemTime::now() - Duration::from_secs(10 * 3600));
+
+    let removed = cleanup_orphans_in(root.path(), 1).expect("cleanup_orphans_in failed");
+    assert_eq!(removed, 0);
+    assert!(inner.exists(), "directory with a recent child was removed");
+}
+
+#[test]
+fn errors_when_the_directory_is_missing() {
+    let root = TempDir::new().unwrap();
+    assert!(cleanup_orphans_in(root.path().join("missing"), 1).is_err());
 }

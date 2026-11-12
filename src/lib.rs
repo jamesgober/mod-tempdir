@@ -15,6 +15,7 @@
 //! * [`cleanup_orphans`]: sweeps the OS temp directory for entries
 //!   left behind by crashed processes and removes those that are
 //!   both PID-dead and older than a caller-supplied age threshold.
+//!   [`cleanup_orphans_in`] does the same for a directory you choose.
 //!
 //! Both types share the same name-generation pipeline, the same
 //! `new_in` / `with_prefix` / `persist` / `cleanup_on_drop` API shape,
@@ -31,8 +32,9 @@
 //! let dir = TempDir::new()?;
 //! std::fs::write(dir.path().join("notes.txt"), b"hello")?;
 //!
-//! let file = NamedTempFile::new()?;
-//! std::fs::write(file.path(), b"hello")?;
+//! use std::io::Write;
+//! let mut file = NamedTempFile::new()?;
+//! file.write_all(b"hello")?;
 //!
 //! // Both are deleted automatically when they go out of scope.
 //! # Ok::<(), std::io::Error>(())
@@ -66,6 +68,13 @@
 //!   prefix containing a path separator (`/` or `\`), `..`, a NUL
 //!   byte, or (on Windows) a `:`, with
 //!   [`io::ErrorKind::InvalidInput`].
+//! * **Use after creation goes through the handle.**
+//!   [`NamedTempFile`] keeps the handle from the exclusive create;
+//!   write through [`NamedTempFile::as_file`] or its [`Write`](std::io::Write)
+//!   impl. [`NamedTempFile::persist_atomic`] and
+//!   [`NamedTempFile::reopen`] check that the path still names that
+//!   file. Opening [`NamedTempFile::path`] by name is safe only in a
+//!   directory no one else can write.
 //!
 //! ## Feature flags
 //!
@@ -101,8 +110,9 @@ mod cleanup;
 mod named_file;
 #[cfg(test)]
 mod security_tests;
+mod sys;
 
-pub use cleanup::cleanup_orphans;
+pub use cleanup::{cleanup_orphans, cleanup_orphans_in};
 pub use named_file::{NamedTempFile, PersistAtomicError};
 
 use std::collections::hash_map::RandomState;
@@ -165,8 +175,8 @@ impl TempDir {
     ///
     /// Same naming, permissions and cleanup as [`TempDir::new`], but
     /// under a parent directory of your choice, which must already
-    /// exist. [`cleanup_orphans`] only sweeps the OS temp location, so
-    /// entries left behind under other parents are not swept.
+    /// exist. [`cleanup_orphans`] only sweeps the OS temp location;
+    /// sweep other parents with [`cleanup_orphans_in`].
     ///
     /// # Errors
     ///
@@ -187,7 +197,7 @@ impl TempDir {
     /// ```
     pub fn new_in(dir: impl AsRef<Path>) -> io::Result<Self> {
         let pid = std::process::id();
-        let path = create_unique(
+        let (path, ()) = create_unique(
             dir.as_ref(),
             |name| format!(".tmp-{pid}-{name}"),
             create_private_dir,
@@ -251,7 +261,7 @@ impl TempDir {
     /// ```
     pub fn with_prefix_in(dir: impl AsRef<Path>, prefix: &str) -> io::Result<Self> {
         validate_prefix(prefix)?;
-        let path = create_unique(
+        let (path, ()) = create_unique(
             dir.as_ref(),
             |name| format!("{prefix}-{name}"),
             create_private_dir,
@@ -351,15 +361,16 @@ pub(crate) fn validate_prefix(prefix: &str) -> io::Result<()> {
 
 /// Create a new entry at `dir/basename(random)`, retrying with a
 /// fresh name whenever `create` reports that the path is taken.
-pub(crate) fn create_unique(
+/// Returns the path and whatever `create` produced for it.
+pub(crate) fn create_unique<T>(
     dir: &Path,
     basename: impl Fn(&str) -> String,
-    create: impl Fn(&Path) -> io::Result<()>,
-) -> io::Result<PathBuf> {
+    create: impl Fn(&Path) -> io::Result<T>,
+) -> io::Result<(PathBuf, T)> {
     for _ in 0..MAX_ATTEMPTS {
         let path = dir.join(basename(&unique_name(NAME_LEN)));
         match create(&path) {
-            Ok(()) => return Ok(path),
+            Ok(made) => return Ok((path, made)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
         }
